@@ -36,7 +36,7 @@ func GetSwitchPricing(c *gin.Context) {
 	// Public and unauthenticated: the platform-shared catalogue only. Passing
 	// "" here is what makes GetPricingForTenant drop every model that is only
 	// served by some tenant's own channels.
-	rawPricing := repo.GetPricingForTenant("")
+	rawPricing := repo.PricedOnly(repo.GetPricingForTenant(""))
 
 	type pricingItem struct {
 		ModelName              interface{} `json:"model_name"`
@@ -45,6 +45,7 @@ func GetSwitchPricing(c *gin.Context) {
 		ModelRatio             interface{} `json:"model_ratio"`
 		CompletionRatio        interface{} `json:"completion_ratio"`
 		ModelPrice             interface{} `json:"model_price"`
+		PriceConfigured        bool        `json:"price_configured"`
 		EnableGroups           interface{} `json:"enable_groups"`
 		SupportedEndpointTypes interface{} `json:"supported_endpoint_types"`
 	}
@@ -65,6 +66,7 @@ func GetSwitchPricing(c *gin.Context) {
 			ModelRatio:             p.ModelRatio,
 			CompletionRatio:        p.CompletionRatio,
 			ModelPrice:             p.ModelPrice,
+			PriceConfigured:        p.PriceConfigured,
 			EnableGroups:           p.EnableGroup,
 			SupportedEndpointTypes: p.SupportedEndpointTypes,
 		})

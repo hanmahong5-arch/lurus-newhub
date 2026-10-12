@@ -118,6 +118,32 @@ describe('buildCatalog', () => {
     expect(e.priced).toBe(true);
   });
 
+  it('treats price_configured=false as unpriced and derives no price', () => {
+    const [off, on, legacy] = buildCatalog({
+      pricing: [
+        {
+          model_name: 'm-off',
+          quota_type: 0,
+          model_ratio: 0,
+          price_configured: false,
+        },
+        {
+          model_name: 'm-on',
+          quota_type: 0,
+          model_ratio: 1,
+          price_configured: true,
+        },
+        // Older server: no flag at all counts as configured.
+        { model_name: 'm-legacy', quota_type: 0, model_ratio: 1 },
+      ],
+    });
+    expect(off.priced).toBe(false);
+    expect(off.inputPerM).toBeNull();
+    expect(on.priced).toBe(true);
+    expect(on.inputPerM).toBeGreaterThan(0);
+    expect(legacy.priced).toBe(true);
+  });
+
   it('attaches usage by name and ignores usage rows for unknown models', () => {
     const entries = buildCatalog({
       ...uat,

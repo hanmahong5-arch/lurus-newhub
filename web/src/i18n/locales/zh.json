@@ -940,6 +940,7 @@
         "th_enable_groups": "启用分组",
         "quota_type_price": "单价计费",
         "quota_type_ratio": "倍率计费",
+        "not_priced": "未配置定价",
         "group_ratio_readonly": "分组倍率（只读）",
         "version_conflict": "定价已被他人更改，正在刷新",
         "preview_btn": "预览",
@@ -1669,7 +1670,8 @@
         "channel_enabled": "已启用",
         "channel_disabled": "已禁用",
         "per_call_price": "${{price}} / 次",
-        "ratio": "倍率 {{ratio}}"
+        "ratio": "倍率 {{ratio}}",
+        "not_priced": "未配置定价"
       },
       "component": {
         "tenant_switcher": {
@@ -2812,6 +2814,7 @@
     "新获取的模型": "新获取的模型",
     "新额度：": "新额度：",
     "无": "无",
+    "未配置定价": "未配置定价",
     "无冲突项": "无冲突项",
     "无效的重置链接，请重新发起密码重置请求": "无效的重置链接，请重新发起密码重置请求",
     "无法复制到剪贴板，请手动复制": "无法复制到剪贴板，请手动复制",

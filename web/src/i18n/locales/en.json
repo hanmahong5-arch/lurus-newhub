@@ -940,6 +940,7 @@
         "th_enable_groups": "enabled groups",
         "quota_type_price": "per-call price",
         "quota_type_ratio": "ratio-based",
+        "not_priced": "Not priced",
         "group_ratio_readonly": "group ratios (read-only)",
         "version_conflict": "Pricing changed since you last loaded it — refreshing",
         "preview_btn": "preview",
@@ -1669,7 +1670,8 @@
         "channel_enabled": "enabled",
         "channel_disabled": "disabled",
         "per_call_price": "${{price}} / call",
-        "ratio": "ratio {{ratio}}"
+        "ratio": "ratio {{ratio}}",
+        "not_priced": "not priced"
       },
       "component": {
         "tenant_switcher": {
@@ -2849,6 +2851,7 @@
     "新获取的模型": "New models",
     "新额度：": "New quota: ",
     "无": "None",
+    "未配置定价": "Not priced",
     "无冲突项": "No conflict items",
     "无效的重置链接，请重新发起密码重置请求": "Invalid reset link, please initiate a new password reset request",
     "无法复制到剪贴板，请手动复制": "Unable to copy to clipboard, please copy manually",

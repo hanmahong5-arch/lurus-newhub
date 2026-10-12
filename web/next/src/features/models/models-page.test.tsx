@@ -92,6 +92,27 @@ describe('ModelsPage', () => {
     expect(free.textContent).not.toContain('$0');
   });
 
+  it('labels a price_configured=false model Unpriced even with a ratio on it', async () => {
+    serve({
+      ...healthy,
+      '/pricing': {
+        pricing: [
+          {
+            model_name: 'model-a',
+            vendor: 'VendorA',
+            model_ratio: 37.5,
+            price_configured: false,
+          },
+        ],
+        group_ratio: { vip: 1, default: 1 },
+      },
+    });
+    renderPage();
+    const card = await screen.findByTestId('model-card-model-a');
+    expect(within(card).getByText('Unpriced')).toBeInTheDocument();
+    expect(card.textContent).not.toContain('/M input');
+  });
+
   it('filters by vendor and switches to the table view', async () => {
     serve(healthy);
     renderPage();

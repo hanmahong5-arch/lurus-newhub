@@ -44,7 +44,7 @@ func GetPricing(c *gin.Context) {
 
 	// "" = the platform-shared catalogue. See the doc comment above for why
 	// there is no per-caller branch here.
-	pricing := repo.GetPricingForTenant("")
+	pricing := repo.PricedOnly(repo.GetPricingForTenant(""))
 
 	usableGroup = app.GetUserUsableGroups(group)
 	// check groupRatio contains usableGroup

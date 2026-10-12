@@ -303,14 +303,13 @@ func computePricingDiffs(items []updatePricingRequest) pricingComputation {
 // before this batch: the base map's own entry when the admin (or a prior
 // write) had configured one explicitly, otherwise whatever
 // ratio_setting.GetModelRatio resolves — a family fallback or, for a model
-// it does not know at all, the getter's default (37.5 today, the same number
-// repo.GetPricing lists and the relay price helper bills) — so the
-// diff/audit trail says "from the fallback" instead of a misleading "from 0"
-// for a model nobody has priced explicitly. The getter's "found" flag is
-// deliberately ignored here: it is false for the unknown-model default when
-// self-use mode is off, but the catalogue and the relay use that default
-// regardless. explicit is false whenever the value came from the getter
-// rather than the base map.
+// it does not know at all, the getter's default (37.5 today, the number the
+// relay price helper falls back to) — so the diff/audit trail says "from the
+// fallback" instead of a misleading "from 0" for a model nobody has priced
+// explicitly. The getter's "found" flag is deliberately ignored here: it is
+// false for the unknown-model default when self-use mode is off, which the
+// catalogue reports as price_configured=false. explicit is false whenever
+// the value came from the getter rather than the base map.
 func effectiveOldModelRatio(base map[string]float64, modelName string) (value float64, explicit bool) {
 	if v, ok := base[modelName]; ok {
 		return v, true

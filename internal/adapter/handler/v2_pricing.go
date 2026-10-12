@@ -69,6 +69,11 @@ func GetPricingV2(c *gin.Context) {
 		QuotaType  interface{} `json:"quota_type"`
 		ModelRatio interface{} `json:"model_ratio"`
 		ModelPrice interface{} `json:"model_price"`
+		// PriceConfigured is false for a model nobody priced (the relay
+		// refuses it by default); its model_ratio is then 0 and the console
+		// shows "not priced". Listed here so an admin can price it; the
+		// public catalogues leave it out (repo.PricedOnly).
+		PriceConfigured bool `json:"price_configured"`
 		// Output price multiplier. Without it the console's pricing page
 		// showed an empty "completion ratio" column and could not state an
 		// output price at all — the catalogue already carries it.
@@ -112,6 +117,7 @@ func GetPricingV2(c *gin.Context) {
 			QuotaType:              p.QuotaType,
 			ModelRatio:             p.ModelRatio,
 			ModelPrice:             p.ModelPrice,
+			PriceConfigured:        p.PriceConfigured,
 			CompletionRatio:        p.CompletionRatio,
 			Description:            p.Description,
 			Icon:                   p.Icon,

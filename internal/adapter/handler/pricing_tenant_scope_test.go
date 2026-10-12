@@ -61,6 +61,19 @@ func seedPricingCatalogue(t *testing.T, ctx *V2TestContext) {
 	}
 	seed("shared-pricing-channel", "default", pricingSharedModel, "default")
 	seed("acme-pricing-channel", ctx.TenantID, pricingPrivateModel, pricingPrivateGroup)
+	// Every model these tests name is priced: the public catalogues drop
+	// unpriced rows (repo.PricedOnly), and an unpriced private model would be
+	// absent from them for that reason alone, so a tenant-scope leak would go
+	// unseen.
+	prev := ratio_setting.ModelRatio2JSONString()
+	t.Cleanup(func() {
+		_ = ratio_setting.UpdateModelRatioByJSONString(prev)
+		repo.InvalidatePricingCache()
+	})
+	if err := ratio_setting.UpdateModelRatioByJSONString(`{"` + pricingSharedModel + `":1,"` + pricingPrivateModel +
+		`":1,"orphan-ability-model":1,"other-tenant-private-model":1}`); err != nil {
+		t.Fatalf("seed ratios: %v", err)
+	}
 	repo.InvalidatePricingCache()
 	t.Cleanup(repo.InvalidatePricingCache)
 }

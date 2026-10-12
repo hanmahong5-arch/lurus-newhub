@@ -25,6 +25,14 @@ type Pricing struct {
 	// SearchUnitPrice is nil (omitted) when unconfigured and a pointer to 0
 	// when explicitly free: the two must stay distinguishable.
 	SearchUnitPrice *float64 `json:"search_unit_price,omitempty"`
+	// PriceConfigured is true when the model has a fixed per-call price or an
+	// explicit/derived ratio. False means nobody priced it: by default the
+	// relay refuses the model (model_price_error), and only self-use mode or a
+	// user's AcceptUnsetRatioModel setting lets it through at the unconfigured
+	// fallback ratio. ModelRatio is then 0, not that fallback, so no consumer
+	// shows an invented price; the public catalogues omit such rows entirely
+	// (repo.PricedOnly).
+	PriceConfigured bool `json:"price_configured"`
 }
 
 type PricingVendor struct {

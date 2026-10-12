@@ -335,7 +335,11 @@ const PricingCardView = ({
                       <div className='grid grid-cols-3 gap-2 text-xs text-gray-600'>
                         <div>
                           {t('模型')}:{' '}
-                          {model.quota_type === 0 ? model.model_ratio : t('无')}
+                          {priceData.unpriced
+                            ? t('未配置定价')
+                            : model.quota_type === 0
+                              ? model.model_ratio
+                              : t('无')}
                         </div>
                         <div>
                           {t('补全')}:{' '}

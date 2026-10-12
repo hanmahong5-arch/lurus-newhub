@@ -708,6 +708,20 @@ export const calculateModelPrice = ({
     }
   }
 
+  // 后端对未配置价格的模型返回 price_configured=false（relay 会拒绝该模型），
+  // 此时不展示任何数字；字段缺失（旧版后端）视为已配置。
+  if (record.price_configured === false) {
+    return {
+      unpriced: true,
+      price: '-',
+      inputPrice: '-',
+      completionPrice: '-',
+      isPerToken: false,
+      usedGroup,
+      usedGroupRatio,
+    };
+  }
+
   // 2. 根据计费类型计算价格
   if (record.quota_type === 0) {
     // 按量计费
@@ -782,6 +796,14 @@ export const calculateModelPrice = ({
 
 // 格式化价格信息（用于卡片视图）
 export const formatPriceInfo = (priceData, t) => {
+  if (priceData.unpriced) {
+    return (
+      <span style={{ color: 'var(--semi-color-text-2)' }}>
+        {t('未配置定价')}
+      </span>
+    );
+  }
+
   if (priceData.isPerToken) {
     return (
       <>

@@ -212,7 +212,12 @@ export const getPricingTableColumns = ({
       return (
         <div className='space-y-1'>
           <div className='text-gray-700'>
-            {t('模型倍率')}：{record.quota_type === 0 ? text : t('无')}
+            {t('模型倍率')}：
+            {priceData?.unpriced
+              ? t('未配置定价')
+              : record.quota_type === 0
+                ? text
+                : t('无')}
           </div>
           <div className='text-gray-700'>
             {t('补全倍率')}：
@@ -232,6 +237,10 @@ export const getPricingTableColumns = ({
     ...(isMobile ? {} : { fixed: 'right' }),
     render: (text, record, index) => {
       const priceData = getPriceData(record);
+
+      if (priceData.unpriced) {
+        return <div className='text-gray-500'>{t('未配置定价')}</div>;
+      }
 
       if (priceData.isPerToken) {
         return (

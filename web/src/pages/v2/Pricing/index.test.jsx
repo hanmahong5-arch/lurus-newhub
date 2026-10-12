@@ -172,6 +172,27 @@ describe('Pricing page', () => {
     });
   });
 
+  // price_configured=false rows come back with model_ratio 0; the editor must
+  // show an empty input labelled "Not priced", not a literal 0 price.
+  it('shows an unpriced model as an empty ratio field labelled Not priced', async () => {
+    API.get.mockResolvedValue(
+      fakePricingResponse([
+        { ...THREE_MODELS[0], model_ratio: 0, price_configured: false },
+        { ...THREE_MODELS[2], price_configured: true },
+      ]),
+    );
+    render(<PricingPage />);
+    await waitFor(() => {
+      expect(screen.getByTestId('field-model_ratio-model-a')).toBeTruthy();
+    });
+    const unpriced = screen.getByTestId('field-model_ratio-model-a');
+    expect(unpriced.value).toBe('');
+    expect(unpriced.getAttribute('placeholder')).toBe('Not priced');
+    const priced = screen.getByTestId('field-model_ratio-model-c');
+    expect(priced.value).toBe('1.25');
+    expect(priced.getAttribute('placeholder')).toBeNull();
+  });
+
   // 2. Save button is disabled when there are no unsaved edits.
   it('disables save button when no edits pending', async () => {
     API.get.mockResolvedValue(fakePricingResponse([]));

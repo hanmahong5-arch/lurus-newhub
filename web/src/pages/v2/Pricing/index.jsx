@@ -410,8 +410,17 @@ const PricingPage = () => {
                               min='0.0001'
                               value={
                                 edits[row.model_name]?.model_ratio ??
-                                row.model_ratio ??
-                                ''
+                                (row.price_configured === false
+                                  ? ''
+                                  : (row.model_ratio ?? ''))
+                              }
+                              placeholder={
+                                row.price_configured === false
+                                  ? tr(
+                                      'console.pricing.not_priced',
+                                      'Not priced',
+                                    )
+                                  : undefined
                               }
                               onChange={(e) =>
                                 handleFieldChange(
