@@ -21,7 +21,7 @@ func ValidateRerankResponse(info *RelayInfo, resp *dto.RerankResponse) *types.Ne
 		return types.NewOpenAIError(
 			fmt.Errorf("upstream rerank usage is self-contradictory (prompt=%d completion=%d total=%d)",
 				resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.Usage.TotalTokens),
-			types.ErrorCodeInvalidProviderUsage, http.StatusBadGateway)
+			types.ErrorCodeInvalidProviderUsage, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 	}
 	if info == nil || info.RerankerInfo == nil || !info.ReturnDocuments {
 		dto.StripRerankDocuments(resp.Results)

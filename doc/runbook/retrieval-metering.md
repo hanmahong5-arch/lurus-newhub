@@ -56,7 +56,7 @@ curl -X PUT https://hub.lurus.cn/api/v2/admin/options \
 
 ## 4. 厂商用量自相矛盾:502 `invalid_provider_usage`
 
-rerank 响应里的 usage 若自相矛盾(例如 `total_tokens=0` 而 `prompt_tokens>0`,或出现负数),网关返回 **502 `invalid_provider_usage`**,该次**不扣费**,并给 `lurus_relay_invalid_usage_total{relay_mode="rerank"}` 加一。只有一个计数字段(如 Jina 只回 `total_tokens`)不算矛盾,按该字段结算。厂商完全不回 usage 时用网关估算值并标 `usage_source=estimated`。
+rerank 响应里的 usage 若自相矛盾(例如 `total_tokens=0` 而 `prompt_tokens>0`,或出现负数),网关返回 **502 `invalid_provider_usage`**,该次**不扣费、不重试**(厂商已经干完活、多半也已向我们计费,重试只会重复成本并拿到同样的矛盾回包;与 `invalid_provider_response` 一致),并给 `lurus_relay_invalid_usage_total{relay_mode="rerank"}` 加一。只有一个计数字段(如 Jina 只回 `total_tokens`)不算矛盾,按该字段结算。厂商完全不回 usage 时用网关估算值并标 `usage_source=estimated`。
 
 另一个同为 502 的错误是 `invalid_provider_response`(响应体格式合法但内容不可信,如 rerank 结果排序/索引不一致),不重试、不切渠道。两者的契约见 `docs/openapi/relay.json` 的 `/v1/rerank`。
 

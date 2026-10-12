@@ -98,7 +98,7 @@ func RerankHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 			return nil, types.NewOpenAIError(
 				fmt.Errorf("upstream rerank usage is self-contradictory (prompt=%d completion=%d total=%d)",
 					jinaResp.Usage.PromptTokens, jinaResp.Usage.CompletionTokens, jinaResp.Usage.TotalTokens),
-				types.ErrorCodeInvalidProviderUsage, http.StatusBadGateway)
+				types.ErrorCodeInvalidProviderUsage, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 		}
 		if usageAbsent(jinaResp.Usage) {
 			est := info.GetEstimatePromptTokens()
