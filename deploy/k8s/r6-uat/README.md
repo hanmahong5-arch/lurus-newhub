@@ -105,6 +105,31 @@ by this lane, which only ships the route+handler code):
    - The same GET with a different user's token → 404 `Task not found`,
      byte-identical to a random `task_id`.
 
+### Retrieval wires: rerank and embeddings
+
+Same `FAULTSIM_TOKEN` gate and auth as every other faultsim route
+(`internal/adapter/handler/faultsim_retrieval.go`), so retrieval metering
+(`usage_unit` / `usage_source`, migration 053) can be exercised end to end with
+no vendor key. Seed a channel exactly like the task-vendor one above
+(`base_url` = `https://test-newhub.lurus.cn/api/v2/faultsim`, `key` =
+`FAULTSIM_TOKEN`, every model priced) with these types:
+
+| Route | Channel type | Upstream path the adaptor appends | Wire |
+|-------|--------------|-----------------------------------|------|
+| `POST /api/v2/faultsim/v1/rerank` | Jina (38) | `/v1/rerank` | Jina rerank |
+| `POST /api/v2/faultsim/v1/embeddings` | OpenAI (1) or Jina (38) | `/v1/embeddings` | OpenAI embeddings |
+
+Model modes (the `model` field, or `?mode=`; success is `ok` / `ok-*`):
+
+| Model | Rerank | Embeddings |
+|-------|--------|------------|
+| `ok`, `ok-*` | Deterministic score per document index (not monotonic in it), results sorted by `relevance_score` descending, `top_n` honoured, `document: {"text": ...}` only when `return_documents` is true, `usage: {"total_tokens": N}` with N = words in query + documents | One item per input (string or array), vector of `dimensions` floats (default 8, max 4096), base64 little-endian float32 when `encoding_format` is `base64`, `usage` prompt = total = words in all inputs |
+| `ok-nousage*` | `usage` omitted: the gateway estimates, `usage_source=estimated` | `usage` omitted |
+| `ok-badusage*` | `prompt_tokens > 0` with `total_tokens = 0`: the gateway answers 502 `invalid_provider_usage` and bills nothing | Behaves as plain `ok` |
+| `http_500`, `rate_limit_429`, ... | The shared fault modes | The shared fault modes |
+
+A request with no `documents` (rerank) or no `input` (embeddings) is a 400.
+
 ## Business-test seed
 
 `scripts/uat/seed.ts` (usage: `scripts/uat/README.md`) builds the demo tenants,

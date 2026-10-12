@@ -117,6 +117,10 @@ func SetApiV2Router(router *gin.Engine) {
 			// System One wire: model "ok-decision" answers a routing question
 			// with a fixed probability distribution (decision routing, migration 054).
 			apiV2.POST("/faultsim/v1/systemone", handler.FaultSimSystemOne)
+			// Retrieval wires: Jina rerank and OpenAI embeddings (models ok / ok-nousage* /
+			// ok-badusage*), so retrieval metering can be exercised end to end on UAT.
+			apiV2.POST("/faultsim/v1/rerank", handler.FaultSimRerank)
+			apiV2.POST("/faultsim/v1/embeddings", handler.FaultSimEmbeddings)
 			// Task-vendor fault simulator (cycle-8 L8): imitates the Suno
 			// wire so a UAT channel (type ChannelTypeSunoAPI, base_url
 			// http://127.0.0.1:3000/api/v2/faultsim, key=FAULTSIM_TOKEN)
