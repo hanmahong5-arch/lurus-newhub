@@ -708,6 +708,20 @@ export const calculateModelPrice = ({
     }
   }
 
+  // 后端对未配置价格的模型返回 price_configured=false（relay 会拒绝该模型），
+  // 此时不展示任何数字；字段缺失（旧版后端）视为已配置。
+  if (record.price_configured === false) {
+    return {
+      unpriced: true,
+      price: '-',
+      inputPrice: '-',
+      completionPrice: '-',
+      isPerToken: false,
+      usedGroup,
+      usedGroupRatio,
+    };
+  }
+
   // 2. 根据计费类型计算价格
   if (record.quota_type === 0) {
     // 按量计费
@@ -780,29 +794,8 @@ export const calculateModelPrice = ({
   };
 };
 
-// 格式化价格信息（用于卡片视图）
-export const formatPriceInfo = (priceData, t) => {
-  if (priceData.isPerToken) {
-    return (
-      <>
-        <span style={{ color: 'var(--semi-color-text-1)' }}>
-          {t('输入')} {priceData.inputPrice}/{priceData.unitLabel}
-        </span>
-        <span style={{ color: 'var(--semi-color-text-1)' }}>
-          {t('输出')} {priceData.completionPrice}/{priceData.unitLabel}
-        </span>
-      </>
-    );
-  }
-
-  return (
-    <>
-      <span style={{ color: 'var(--semi-color-text-1)' }}>
-        {t('模型价格')} {priceData.price}
-      </span>
-    </>
-  );
-};
+// 格式化价格信息（用于卡片视图）;实现在 priceInfo.jsx(行数棘轮)
+export { formatPriceInfo } from './priceInfo';
 
 // -------------------------------
 // CardPro 分页配置函数

@@ -353,16 +353,7 @@ func updatePricing() {
 			pricing.VendorID = meta.VendorID
 		}
 		pricing.Modality = pickModality(override, modelModalities[model])
-		modelPrice, findPrice := ratio_setting.GetModelPrice(model, false)
-		if findPrice {
-			pricing.ModelPrice = modelPrice
-			pricing.QuotaType = 1
-		} else {
-			modelRatio, _, _ := ratio_setting.GetModelRatio(model)
-			pricing.ModelRatio = modelRatio
-			pricing.CompletionRatio = ratio_setting.GetCompletionRatio(model)
-			pricing.QuotaType = 0
-		}
+		applyCatalogPrice(&pricing, model)
 		pricingMap = append(pricingMap, pricing)
 	}
 
@@ -388,6 +379,37 @@ func updatePricing() {
 	modelEnableGroupsLock.Unlock()
 
 	lastGetPricingTime = time.Now()
+}
+
+// applyCatalogPrice fills the price columns of one catalogue row from the live
+// ratio tables. A model with neither a fixed per-call price nor a configured
+// ratio keeps PriceConfigured=false and ModelRatio=0: GetModelRatio answers a
+// 37.5 fallback for it (about $75 per 1M tokens) while the relay, by default,
+// refuses the model (self-use mode and a user's AcceptUnsetRatioModel are the
+// exceptions), so listing that number would advertise a price nobody priced.
+func applyCatalogPrice(pricing *Pricing, model string) {
+	modelPrice, findPrice := ratio_setting.GetModelPrice(model, false)
+	if findPrice {
+		pricing.ModelPrice = modelPrice
+		pricing.PriceConfigured = true
+		pricing.QuotaType = 1
+		return
+	}
+	modelRatio, ratioConfigured, _ := ratio_setting.GetModelRatio(model)
+	if !ratioConfigured && strings.HasSuffix(model, ":free") {
+		// The relay bills an OpenRouter ":free" variant at ratio 0 without a
+		// configured entry (relay/helper isOpenRouterFreeModel); list it as
+		// the free model it is rather than as unpriced. The catalogue row has
+		// no channel type, so this is the name rule only: a ":free" name
+		// served by a non-OpenRouter channel would be refused yet listed free.
+		modelRatio, ratioConfigured = 0, true
+	}
+	pricing.PriceConfigured = ratioConfigured
+	if ratioConfigured {
+		pricing.ModelRatio = modelRatio
+	}
+	pricing.CompletionRatio = ratio_setting.GetCompletionRatio(model)
+	pricing.QuotaType = 0
 }
 
 // GetSupportedEndpointMap 返回全局端点到路径的映射
@@ -438,6 +460,23 @@ func GetPricingForTenant(tenantID string) []Pricing {
 		visible = append(visible, item)
 	}
 	return visible
+}
+
+// PricedOnly drops the rows whose price is not configured. The public
+// catalogues (/api/pricing, /api/v2/switch/pricing) are read by consumers that
+// predate price_configured and only see model_ratio: the desktop client ranks
+// models by it (a 0 would be recommended as the cheapest) and peer gateways
+// sync ratios from /api/pricing (a 0 would be copied as free). A model with no
+// price cannot be relayed by default anyway, so it is left out of those
+// answers; the tenant pricing view keeps it, flagged, so an admin can price it.
+func PricedOnly(rows []Pricing) []Pricing {
+	out := make([]Pricing, 0, len(rows))
+	for _, p := range rows {
+		if p.PriceConfigured {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // visiblePricingGroups unions the groups contributed by the platform-shared

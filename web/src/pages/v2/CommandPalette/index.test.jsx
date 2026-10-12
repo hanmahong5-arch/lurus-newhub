@@ -161,6 +161,29 @@ describe('CommandPalette — real data', () => {
     expect(document.body.textContent).toContain('DeepSeek · ratio 0.5');
   });
 
+  it('labels a model the server flags price_configured=false as not priced', async () => {
+    wireGet({
+      models: [{ model_name: 'model-a', vendor: 'Vendor A' }],
+      pricing: [
+        {
+          model_name: 'model-a',
+          quota_type: 0,
+          model_ratio: 0,
+          price_configured: false,
+        },
+      ],
+      logs: [],
+    });
+
+    render(<HFCmdK />);
+
+    await waitFor(() =>
+      expect(screen.getAllByText('model-a').length).toBeGreaterThan(0),
+    );
+    expect(document.body.textContent).toContain('Vendor A · not priced');
+    expect(document.body.textContent).not.toContain('ratio 0');
+  });
+
   it('shows a model with no pricing row without fabricating one', async () => {
     wireGet({ pricing: [] });
 

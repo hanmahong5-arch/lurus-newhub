@@ -119,7 +119,10 @@ export function buildCatalog({
   for (const p of pricing) {
     if (!p?.model_name) continue;
     const e = entry(p.model_name);
-    e.priced = true;
+    // price_configured=false: the server lists the model but the relay
+    // refuses it (no price, no ratio). A missing field (older server) counts
+    // as configured.
+    e.priced = p.price_configured !== false;
     if (p.vendor) e.vendor = p.vendor;
     if (p.description) e.description = p.description;
     if (p.tags) {
@@ -130,10 +133,11 @@ export function buildCatalog({
     }
     addCaps(e, p.supported_endpoint_types);
     e.quotaType = p.quota_type ?? 0;
-    if (e.quotaType === 1) {
+    // An unpriced row derives nothing: its price fields stay null.
+    if (e.priced && e.quotaType === 1) {
       const price = num(p.model_price);
       e.perCall = price == null ? null : price * gr;
-    } else {
+    } else if (e.priced) {
       const ratio = num(p.model_ratio);
       if (ratio != null) {
         e.inputPerM = ratio * USD_PER_M_PER_RATIO * gr;

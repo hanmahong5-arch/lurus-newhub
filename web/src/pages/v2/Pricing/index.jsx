@@ -27,6 +27,7 @@ import useFormDraft from '../../../hooks/common/useFormDraft';
 import { useTenantRead } from '../../../hooks/common/useTenantRead';
 import { useTenantSlug } from '../../../hooks/common/useTenantSlug';
 import TierCell from './TierCell';
+import { ratioFieldProps } from './ratioField';
 
 /* v2 Pricing — GET /api/v2/:tenant_slug/pricing (2026-05-19)
    Write path — POST /api/v2/:tenant_slug/pricing (Epic 12, 2026-05-20).
@@ -408,11 +409,7 @@ const PricingPage = () => {
                               className='field'
                               step='0.0001'
                               min='0.0001'
-                              value={
-                                edits[row.model_name]?.model_ratio ??
-                                row.model_ratio ??
-                                ''
-                              }
+                              {...ratioFieldProps(row, edits, tr)}
                               onChange={(e) =>
                                 handleFieldChange(
                                   row.model_name,

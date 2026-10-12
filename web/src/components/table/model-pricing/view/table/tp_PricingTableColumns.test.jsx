@@ -325,6 +325,31 @@ describe('price column — per-token quoting', () => {
     expect(cell.textContent).toContain('输出 $0.0000');
     expect(cell.textContent).not.toContain('-');
   });
+
+  // price_configured=false is the server saying the relay refuses this model:
+  // no number may be quoted, in either column.
+  it('labels a model the server flags price_configured=false as not priced', () => {
+    const columns = buildColumns();
+    const record = perTokenModel({ price_configured: false, model_ratio: 0 });
+    const priceCell = renderCell(columnFor(columns, 'model_price'), record);
+    expect(priceCell.textContent).toBe('未配置定价');
+    const ratioCell = renderCell(columnFor(columns, 'model_ratio'), record);
+    expect(ratioCell.textContent).toContain('模型倍率：未配置定价');
+  });
+
+  it('treats a missing price_configured (older server) as configured', () => {
+    const columns = buildColumns();
+    const priceCell = renderCell(
+      columnFor(columns, 'model_price'),
+      perTokenModel(),
+    );
+    expect(priceCell.textContent).not.toContain('未配置定价');
+    const explicit = renderCell(
+      columnFor(columns, 'model_price'),
+      perTokenModel({ price_configured: true }),
+    );
+    expect(explicit.textContent).toContain('输入 $');
+  });
 });
 
 describe('ratio column — the three ratios behind the price', () => {

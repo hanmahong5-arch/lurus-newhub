@@ -62,6 +62,9 @@ const NONE = [];
 // invented number.
 const priceHint = (entry, tr) => {
   if (!entry) return '';
+  if (entry.price_configured === false) {
+    return tr('console.palette.not_priced', 'not priced');
+  }
   if (entry.quota_type === 1 && typeof entry.model_price === 'number') {
     return tr('console.palette.per_call_price', '${{price}} / call', {
       price: entry.model_price,

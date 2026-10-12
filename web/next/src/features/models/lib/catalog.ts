@@ -62,6 +62,12 @@ export interface PricingRow {
   quota_type?: number;
   model_ratio?: number | null;
   model_price?: number | null;
+  /**
+   * False = nobody priced the model (no price, no ratio; the relay refuses it
+   * by default); model_ratio is then 0. Absent (older server) counts as
+   * configured.
+   */
+  price_configured?: boolean;
   completion_ratio?: number | null;
   cache_ratio?: number | null;
   supported_endpoint_types?: string[] | null;
@@ -240,7 +246,7 @@ export function buildCatalog({
   for (const p of pricing) {
     if (!p?.model_name) continue;
     const e = entry(p.model_name);
-    e.priced = true;
+    e.priced = p.price_configured !== false;
     if (p.vendor) e.vendor = p.vendor;
     if (p.description) e.description = p.description;
     if (p.tags) {
@@ -255,10 +261,12 @@ export function buildCatalog({
     // Absent/null stays null ("not configured"); a literal 0 stays 0 ("free").
     e.searchUnitPrice = num(p.search_unit_price);
     e.quotaType = p.quota_type ?? 0;
-    if (e.quotaType === 1) {
+    // An unpriced row derives nothing: its price fields stay null, which the
+    // views render as "Unpriced".
+    if (e.priced && e.quotaType === 1) {
       const price = num(p.model_price);
       e.perCall = price == null ? null : price * gr;
-    } else {
+    } else if (e.priced) {
       const ratio = num(p.model_ratio);
       if (ratio != null) {
         e.inputPerM = ratio * usdPerRatioArg * gr;

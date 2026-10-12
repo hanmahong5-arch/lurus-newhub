@@ -59,6 +59,7 @@ const ModelPricingTable = ({
             currency,
           })
         : { inputPrice: '-', outputPrice: '-', price: '-' };
+      const unpriced = priceData.unpriced === true;
 
       // 获取分组倍率
       const groupRatioValue =
@@ -74,12 +75,21 @@ const ModelPricingTable = ({
             : modelData?.quota_type === 1
               ? t('按次计费')
               : '-',
-        inputPrice: modelData?.quota_type === 0 ? priceData.inputPrice : '-',
-        outputPrice:
-          modelData?.quota_type === 0
+        inputPrice: unpriced
+          ? t('未配置定价')
+          : modelData?.quota_type === 0
+            ? priceData.inputPrice
+            : '-',
+        outputPrice: unpriced
+          ? t('未配置定价')
+          : modelData?.quota_type === 0
             ? priceData.completionPrice || priceData.outputPrice
             : '-',
-        fixedPrice: modelData?.quota_type === 1 ? priceData.price : '-',
+        fixedPrice: unpriced
+          ? t('未配置定价')
+          : modelData?.quota_type === 1
+            ? priceData.price
+            : '-',
       };
     });
 

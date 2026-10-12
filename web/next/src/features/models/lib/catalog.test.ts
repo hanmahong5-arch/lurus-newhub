@@ -80,6 +80,25 @@ describe('buildCatalog price conversion', () => {
     for (const e of entries) expect(hasPrice(e)).toBe(false);
   });
 
+  it('treats price_configured=false as unpriced whatever ratio it carries', () => {
+    const [off, on, legacy] = buildCatalog({
+      usdPerRatio: usdPerRatio(USD),
+      pricing: [
+        { model_name: 'off', model_ratio: 37.5, price_configured: false },
+        { model_name: 'on', model_ratio: 1, price_configured: true },
+        // Older server: no flag at all counts as configured.
+        { model_name: 'legacy', model_ratio: 1 },
+      ],
+    });
+    expect(off.priced).toBe(false);
+    expect(off.inputPerM).toBeNull();
+    expect(hasPrice(off)).toBe(false);
+    expect(on.priced).toBe(true);
+    expect(hasPrice(on)).toBe(true);
+    expect(legacy.priced).toBe(true);
+    expect(hasPrice(legacy)).toBe(true);
+  });
+
   it('keeps system one input-only instead of inventing an output price', () => {
     const [e] = buildCatalog({
       usdPerRatio: usdPerRatio(USD),
