@@ -30,8 +30,8 @@ func TestValidateRerankResponse(t *testing.T) {
 		{"normal keeps docs when asked", withDocs, mk(ok, 0.9, 0.1), "", true, false},
 		{"docs stripped when not asked", noDocs, mk(ok, 0.9, 0.1), "", false, false},
 		{"docs stripped when info nil", nil, mk(ok, 0.9, 0.1), "", false, false},
-		{"contradictory usage", withDocs, mk(dto.Usage{PromptTokens: 7}, 0.9), types.ErrorCodeInvalidProviderUsage, true, false},
-		{"negative usage", withDocs, mk(dto.Usage{TotalTokens: -1}, 0.9), types.ErrorCodeInvalidProviderUsage, true, false},
+		{"contradictory usage", withDocs, mk(dto.Usage{PromptTokens: 7}, 0.9), types.ErrorCodeInvalidProviderUsage, true, true},
+		{"negative usage", withDocs, mk(dto.Usage{TotalTokens: -1}, 0.9), types.ErrorCodeInvalidProviderUsage, true, true},
 		{"misordered", withDocs, mk(ok, 0.1, 0.9), types.ErrorCodeInvalidProviderResponse, true, true},
 	}
 	for _, tc := range cases {
@@ -52,8 +52,11 @@ func TestValidateRerankResponse(t *testing.T) {
 			if err.GetErrorCode() != tc.wantCode || err.StatusCode != http.StatusBadGateway {
 				t.Errorf("code/status = %s/%d", err.GetErrorCode(), err.StatusCode)
 			}
-			if tc.skipRetr && !types.IsSkipRetryError(err) {
-				t.Error("misordered response must skip retry")
+			// Every provider-validation rejection ends the request: the
+			// upstream already did (and billed) the work, so a retry only
+			// repeats the cost and the same malformed answer.
+			if got := types.IsSkipRetryError(err); got != tc.skipRetr {
+				t.Errorf("skip retry = %v, want %v", got, tc.skipRetr)
 			}
 		})
 	}
