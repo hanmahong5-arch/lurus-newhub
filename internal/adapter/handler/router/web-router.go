@@ -25,10 +25,12 @@ import (
 // so dist-root files like /logo.png are outside the budget too.
 const assetURLPrefix = "/assets/"
 
-// nextMountPrefix is where the new console (web/next, built with rsbuild) is
-// served: its build lands in dist/next, its asset URLs start with /next/, and
-// its client router uses /next as basepath. Keep the three in step
-// (web/next/rsbuild.config.ts, web/next/src/lib/constants.ts).
+// nextMountPrefix is where the new console's build output lives: its build
+// lands in dist/next and its asset URLs start with /next/ (rsbuild assetPrefix,
+// web/next/rsbuild.config.ts). Its client router no longer uses it as a
+// basepath — the new console owns the site root (see isLegacyPath) — so a URL
+// under /next/ that is not a file is an old bookmark and is redirected to the
+// same path without the prefix.
 const nextMountPrefix = "/next"
 
 // nextAssetURLPrefix is the new console's hashed build output (rsbuild writes
@@ -45,16 +47,58 @@ func isHashedAssetPath(urlPath string) bool {
 	return strings.HasPrefix(urlPath, assetURLPrefix) || strings.HasPrefix(urlPath, nextAssetURLPrefix)
 }
 
-// isNextPath reports whether a URL path belongs to the new console's SPA:
+// isNextPath reports whether a URL path is under the new console's old mount:
 // exactly /next, or anything under /next/. "/nextfoo" is not.
 func isNextPath(urlPath string) bool {
 	return urlPath == nextMountPrefix || strings.HasPrefix(urlPath, nextMountPrefix+"/")
 }
 
+// legacyOwnedPrefixes are the routes the legacy (Semi UI) console still
+// serves after the new console took over the site root: the sign-in flow
+// (OIDC redirect, UAT bridge login, IdP callback, first-run setup — the Go
+// handlers and the IdP redirect URIs name these paths) and everything under
+// /console, where the operator pages that have no new-console equivalent yet
+// live (the new console links to them from its "Classic console" group).
+var legacyOwnedPrefixes = []string{
+	"/console",
+	"/login",
+	"/register",
+	"/bridge-login",
+	"/oauth",
+	"/setup",
+	"/account-disabled",
+	"/forbidden",
+	"/chat2link",
+}
+
+// isLegacyPath reports whether the legacy console serves a URL path: one of
+// legacyOwnedPrefixes exactly, or anything below it ("/consolex" is not).
+func isLegacyPath(urlPath string) bool {
+	for _, prefix := range legacyOwnedPrefixes {
+		if urlPath == prefix || strings.HasPrefix(urlPath, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// nextBookmarkTarget maps an old /next/... URL onto the same page at the site
+// root, keeping the query string: /next -> /, /next/keys?x=1 -> /keys?x=1.
+func nextBookmarkTarget(urlPath, rawQuery string) string {
+	target := strings.TrimPrefix(urlPath, nextMountPrefix)
+	if target == "" {
+		target = "/"
+	}
+	if rawQuery != "" {
+		target += "?" + rawQuery
+	}
+	return target
+}
+
 // readNextIndex loads the new console's document from the embedded build.
 // It returns nil when the build has no next/index.html — the Go CI jobs stub
 // web/dist down to a single index.html, and a legacy-only build is a valid
-// deployment — and the caller then serves the legacy document for /next/*
+// deployment — and the caller then serves the legacy document everywhere
 // instead of failing.
 func readNextIndex(distFS fs.FS) []byte {
 	if distFS == nil {
@@ -346,7 +390,7 @@ func setWebRoutes(router *gin.Engine, distFS fs.FS, staticFS static.ServeFileSys
 	spaDocumentRateLimit := middleware.GlobalWebRateLimit()
 
 	// Read once at mount: the embedded build cannot change under a running
-	// binary. nil = no new-console build in this binary; /next/* then falls
+	// binary. nil = no new-console build in this binary; every page then falls
 	// back to the legacy document (see readNextIndex).
 	nextIndexPage := readNextIndex(distFS)
 
@@ -372,12 +416,20 @@ func setWebRoutes(router *gin.Engine, distFS fs.FS, staticFS static.ServeFileSys
 		if c.IsAborted() {
 			return
 		}
-		// The new console owns /next and everything under it that is not a
-		// file; its client router resolves the rest. Everything else is the
-		// legacy console.
-		if nextIndexPage != nil && isNextPath(c.Request.URL.Path) {
-			c.Data(http.StatusOK, "text/html; charset=utf-8", nextIndexPage)
-			return
+		// The new console owns the site root; the legacy console keeps the
+		// sign-in flow and /console/*. A binary built without the new console
+		// (the Go CI jobs stub web/dist) serves the legacy document everywhere,
+		// as before the cutover.
+		if nextIndexPage != nil {
+			urlPath := c.Request.URL.Path
+			if isNextPath(urlPath) {
+				c.Redirect(http.StatusFound, nextBookmarkTarget(urlPath, c.Request.URL.RawQuery))
+				return
+			}
+			if !isLegacyPath(urlPath) {
+				c.Data(http.StatusOK, "text/html; charset=utf-8", nextIndexPage)
+				return
+			}
 		}
 		c.Data(http.StatusOK, "text/html; charset=utf-8", indexPage)
 	})

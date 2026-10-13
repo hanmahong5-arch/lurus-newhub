@@ -19,15 +19,16 @@ For commercial licensing, please contact support@quantumnous.com
 
 // Where to send a person once they have signed in.
 //
-// The new console (web/next, served under /next/) has no sign-in screen of
-// its own: an unauthenticated visit is sent to /login?redirect=<path> and this
-// console's login flow brings them back. The value comes from the URL, so it
-// is attacker-controlled; only a same-site relative path is accepted, anything
-// else falls back to the default landing page.
+// The new console (web/next, which owns the site root) has no sign-in screen
+// of its own: an unauthenticated visit is sent to /login?redirect=<path> and
+// this console's login flow brings them back. The value comes from the URL, so
+// it is attacker-controlled; only a same-site relative path is accepted,
+// anything else falls back to the default landing page — the new console's
+// dashboard. The legacy pages stay reachable under /console/*.
 
-export const DEFAULT_LANDING = '/console/v2/dashboard';
+export const DEFAULT_LANDING = '/dashboard';
 
-// Accepts "/next/keys?x=1#y" and rejects everything that could leave the site:
+// Accepts "/keys?x=1#y" and rejects everything that could leave the site:
 // absolute URLs, protocol-relative "//host", backslash tricks ("/\host" is read
 // as a double slash by browsers), control characters, and the sign-in routes
 // themselves (a bounce back to /login would loop).
