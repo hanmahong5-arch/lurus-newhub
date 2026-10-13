@@ -9,14 +9,30 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as IndexRouteImport } from './routes/index'
 import { Route as R404RouteImport } from './routes/404'
 import { Route as R500RouteImport } from './routes/500'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
+import { Route as PublicRouteRouteImport } from './routes/_public/route'
+import { Route as PublicIndexRouteImport } from './routes/_public/index'
+import { Route as PublicAboutRouteImport } from './routes/_public/about'
+import { Route as PublicPrivacyPolicyRouteImport } from './routes/_public/privacy-policy'
+import { Route as PublicUserAgreementRouteImport } from './routes/_public/user-agreement'
+import { Route as AuthenticatedAccountIndexRouteImport } from './routes/_authenticated/account/index'
 import { Route as AuthenticatedDashboardIndexRouteImport } from './routes/_authenticated/dashboard/index'
 import { Route as AuthenticatedKeysIndexRouteImport } from './routes/_authenticated/keys/index'
 import { Route as AuthenticatedModelsIndexRouteImport } from './routes/_authenticated/models/index'
+import { Route as AuthenticatedPlaygroundIndexRouteImport } from './routes/_authenticated/playground/index'
+import { Route as AuthenticatedRankingsIndexRouteImport } from './routes/_authenticated/rankings/index'
+import { Route as AuthenticatedTasksIndexRouteImport } from './routes/_authenticated/tasks/index'
 import { Route as AuthenticatedUsageLogsIndexRouteImport } from './routes/_authenticated/usage-logs/index'
+import { Route as AuthenticatedUsageLogsAuditRouteImport } from './routes/_authenticated/usage-logs/audit'
+import { Route as AuthenticatedWalletIndexRouteImport } from './routes/_authenticated/wallet/index'
+import { Route as PublicPricingIndexRouteImport } from './routes/_public/pricing/index'
+import { Route as PublicPricingModelIdRouteImport } from './routes/_public/pricing/$modelId'
+import { Route as AuthenticatedAdminRedemptionCodesIndexRouteImport } from './routes/_authenticated/admin/redemption-codes/index'
+import { Route as AuthenticatedAdminSettingsIndexRouteImport } from './routes/_authenticated/admin/settings/index'
+import { Route as AuthenticatedAdminSettingsSectionRouteImport } from './routes/_authenticated/admin/settings/$section'
+import { Route as AuthenticatedAdminUsersIndexRouteImport } from './routes/_authenticated/admin/users/index'
 import { Route as AuthenticatedOpsChannelsIndexRouteImport } from './routes/_authenticated/ops/channels/index'
 import { Route as AuthenticatedOpsOverviewIndexRouteImport } from './routes/_authenticated/ops/overview/index'
 import { Route as AuthenticatedOpsRulesIndexRouteImport } from './routes/_authenticated/ops/rules/index'
@@ -26,11 +42,6 @@ import { Route as AuthenticatedOrgKeysBatchIndexRouteImport } from './routes/_au
 import { Route as AuthenticatedOrgMembersIndexRouteImport } from './routes/_authenticated/org/members/index'
 import { Route as AuthenticatedOrgPolicyIndexRouteImport } from './routes/_authenticated/org/policy/index'
 
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const R404Route = R404RouteImport.update({
   id: '/404',
   path: '/404',
@@ -45,6 +56,36 @@ const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
   id: '/_authenticated',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PublicRouteRoute = PublicRouteRouteImport.update({
+  id: '/_public',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PublicIndexRoute = PublicIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => PublicRouteRoute,
+} as any)
+const PublicAboutRoute = PublicAboutRouteImport.update({
+  id: '/about',
+  path: '/about',
+  getParentRoute: () => PublicRouteRoute,
+} as any)
+const PublicPrivacyPolicyRoute = PublicPrivacyPolicyRouteImport.update({
+  id: '/privacy-policy',
+  path: '/privacy-policy',
+  getParentRoute: () => PublicRouteRoute,
+} as any)
+const PublicUserAgreementRoute = PublicUserAgreementRouteImport.update({
+  id: '/user-agreement',
+  path: '/user-agreement',
+  getParentRoute: () => PublicRouteRoute,
+} as any)
+const AuthenticatedAccountIndexRoute =
+  AuthenticatedAccountIndexRouteImport.update({
+    id: '/account/',
+    path: '/account/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedDashboardIndexRoute =
   AuthenticatedDashboardIndexRouteImport.update({
     id: '/dashboard/',
@@ -62,10 +103,73 @@ const AuthenticatedModelsIndexRoute =
     path: '/models/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedPlaygroundIndexRoute =
+  AuthenticatedPlaygroundIndexRouteImport.update({
+    id: '/playground/',
+    path: '/playground/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedRankingsIndexRoute =
+  AuthenticatedRankingsIndexRouteImport.update({
+    id: '/rankings/',
+    path: '/rankings/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedTasksIndexRoute = AuthenticatedTasksIndexRouteImport.update({
+  id: '/tasks/',
+  path: '/tasks/',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 const AuthenticatedUsageLogsIndexRoute =
   AuthenticatedUsageLogsIndexRouteImport.update({
     id: '/usage-logs/',
     path: '/usage-logs/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedUsageLogsAuditRoute =
+  AuthenticatedUsageLogsAuditRouteImport.update({
+    id: '/usage-logs/audit',
+    path: '/usage-logs/audit',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedWalletIndexRoute =
+  AuthenticatedWalletIndexRouteImport.update({
+    id: '/wallet/',
+    path: '/wallet/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const PublicPricingIndexRoute = PublicPricingIndexRouteImport.update({
+  id: '/pricing/',
+  path: '/pricing/',
+  getParentRoute: () => PublicRouteRoute,
+} as any)
+const PublicPricingModelIdRoute = PublicPricingModelIdRouteImport.update({
+  id: '/pricing/$modelId',
+  path: '/pricing/$modelId',
+  getParentRoute: () => PublicRouteRoute,
+} as any)
+const AuthenticatedAdminRedemptionCodesIndexRoute =
+  AuthenticatedAdminRedemptionCodesIndexRouteImport.update({
+    id: '/admin/redemption-codes/',
+    path: '/admin/redemption-codes/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedAdminSettingsIndexRoute =
+  AuthenticatedAdminSettingsIndexRouteImport.update({
+    id: '/admin/settings/',
+    path: '/admin/settings/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedAdminSettingsSectionRoute =
+  AuthenticatedAdminSettingsSectionRouteImport.update({
+    id: '/admin/settings/$section',
+    path: '/admin/settings/$section',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedAdminUsersIndexRoute =
+  AuthenticatedAdminUsersIndexRouteImport.update({
+    id: '/admin/users/',
+    path: '/admin/users/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
 const AuthenticatedOpsChannelsIndexRoute =
@@ -118,13 +222,28 @@ const AuthenticatedOrgPolicyIndexRoute =
   } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
+  '/': typeof PublicIndexRoute
   '/404': typeof R404Route
   '/500': typeof R500Route
+  '/about': typeof PublicAboutRoute
+  '/privacy-policy': typeof PublicPrivacyPolicyRoute
+  '/user-agreement': typeof PublicUserAgreementRoute
+  '/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
+  '/pricing/$modelId': typeof PublicPricingModelIdRoute
+  '/account/': typeof AuthenticatedAccountIndexRoute
   '/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/keys/': typeof AuthenticatedKeysIndexRoute
   '/models/': typeof AuthenticatedModelsIndexRoute
+  '/playground/': typeof AuthenticatedPlaygroundIndexRoute
+  '/rankings/': typeof AuthenticatedRankingsIndexRoute
+  '/tasks/': typeof AuthenticatedTasksIndexRoute
   '/usage-logs/': typeof AuthenticatedUsageLogsIndexRoute
+  '/wallet/': typeof AuthenticatedWalletIndexRoute
+  '/pricing/': typeof PublicPricingIndexRoute
+  '/admin/settings/$section': typeof AuthenticatedAdminSettingsSectionRoute
+  '/admin/redemption-codes/': typeof AuthenticatedAdminRedemptionCodesIndexRoute
+  '/admin/settings/': typeof AuthenticatedAdminSettingsIndexRoute
+  '/admin/users/': typeof AuthenticatedAdminUsersIndexRoute
   '/ops/channels/': typeof AuthenticatedOpsChannelsIndexRoute
   '/ops/overview/': typeof AuthenticatedOpsOverviewIndexRoute
   '/ops/rules/': typeof AuthenticatedOpsRulesIndexRoute
@@ -135,13 +254,28 @@ export interface FileRoutesByFullPath {
   '/org/policy/': typeof AuthenticatedOrgPolicyIndexRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute
+  '/': typeof PublicIndexRoute
   '/404': typeof R404Route
   '/500': typeof R500Route
+  '/about': typeof PublicAboutRoute
+  '/privacy-policy': typeof PublicPrivacyPolicyRoute
+  '/user-agreement': typeof PublicUserAgreementRoute
+  '/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
+  '/pricing/$modelId': typeof PublicPricingModelIdRoute
+  '/account': typeof AuthenticatedAccountIndexRoute
   '/dashboard': typeof AuthenticatedDashboardIndexRoute
   '/keys': typeof AuthenticatedKeysIndexRoute
   '/models': typeof AuthenticatedModelsIndexRoute
+  '/playground': typeof AuthenticatedPlaygroundIndexRoute
+  '/rankings': typeof AuthenticatedRankingsIndexRoute
+  '/tasks': typeof AuthenticatedTasksIndexRoute
   '/usage-logs': typeof AuthenticatedUsageLogsIndexRoute
+  '/wallet': typeof AuthenticatedWalletIndexRoute
+  '/pricing': typeof PublicPricingIndexRoute
+  '/admin/settings/$section': typeof AuthenticatedAdminSettingsSectionRoute
+  '/admin/redemption-codes': typeof AuthenticatedAdminRedemptionCodesIndexRoute
+  '/admin/settings': typeof AuthenticatedAdminSettingsIndexRoute
+  '/admin/users': typeof AuthenticatedAdminUsersIndexRoute
   '/ops/channels': typeof AuthenticatedOpsChannelsIndexRoute
   '/ops/overview': typeof AuthenticatedOpsOverviewIndexRoute
   '/ops/rules': typeof AuthenticatedOpsRulesIndexRoute
@@ -153,14 +287,30 @@ export interface FileRoutesByTo {
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
+  '/_public': typeof PublicRouteRouteWithChildren
   '/404': typeof R404Route
   '/500': typeof R500Route
+  '/_public/about': typeof PublicAboutRoute
+  '/_public/privacy-policy': typeof PublicPrivacyPolicyRoute
+  '/_public/user-agreement': typeof PublicUserAgreementRoute
+  '/_public/': typeof PublicIndexRoute
+  '/_authenticated/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
+  '/_public/pricing/$modelId': typeof PublicPricingModelIdRoute
+  '/_authenticated/account/': typeof AuthenticatedAccountIndexRoute
   '/_authenticated/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/_authenticated/keys/': typeof AuthenticatedKeysIndexRoute
   '/_authenticated/models/': typeof AuthenticatedModelsIndexRoute
+  '/_authenticated/playground/': typeof AuthenticatedPlaygroundIndexRoute
+  '/_authenticated/rankings/': typeof AuthenticatedRankingsIndexRoute
+  '/_authenticated/tasks/': typeof AuthenticatedTasksIndexRoute
   '/_authenticated/usage-logs/': typeof AuthenticatedUsageLogsIndexRoute
+  '/_authenticated/wallet/': typeof AuthenticatedWalletIndexRoute
+  '/_public/pricing/': typeof PublicPricingIndexRoute
+  '/_authenticated/admin/settings/$section': typeof AuthenticatedAdminSettingsSectionRoute
+  '/_authenticated/admin/redemption-codes/': typeof AuthenticatedAdminRedemptionCodesIndexRoute
+  '/_authenticated/admin/settings/': typeof AuthenticatedAdminSettingsIndexRoute
+  '/_authenticated/admin/users/': typeof AuthenticatedAdminUsersIndexRoute
   '/_authenticated/ops/channels/': typeof AuthenticatedOpsChannelsIndexRoute
   '/_authenticated/ops/overview/': typeof AuthenticatedOpsOverviewIndexRoute
   '/_authenticated/ops/rules/': typeof AuthenticatedOpsRulesIndexRoute
@@ -176,10 +326,25 @@ export interface FileRouteTypes {
     | '/'
     | '/404'
     | '/500'
+    | '/about'
+    | '/privacy-policy'
+    | '/user-agreement'
+    | '/usage-logs/audit'
+    | '/pricing/$modelId'
+    | '/account/'
     | '/dashboard/'
     | '/keys/'
     | '/models/'
+    | '/playground/'
+    | '/rankings/'
+    | '/tasks/'
     | '/usage-logs/'
+    | '/wallet/'
+    | '/pricing/'
+    | '/admin/settings/$section'
+    | '/admin/redemption-codes/'
+    | '/admin/settings/'
+    | '/admin/users/'
     | '/ops/channels/'
     | '/ops/overview/'
     | '/ops/rules/'
@@ -193,10 +358,25 @@ export interface FileRouteTypes {
     | '/'
     | '/404'
     | '/500'
+    | '/about'
+    | '/privacy-policy'
+    | '/user-agreement'
+    | '/usage-logs/audit'
+    | '/pricing/$modelId'
+    | '/account'
     | '/dashboard'
     | '/keys'
     | '/models'
+    | '/playground'
+    | '/rankings'
+    | '/tasks'
     | '/usage-logs'
+    | '/wallet'
+    | '/pricing'
+    | '/admin/settings/$section'
+    | '/admin/redemption-codes'
+    | '/admin/settings'
+    | '/admin/users'
     | '/ops/channels'
     | '/ops/overview'
     | '/ops/rules'
@@ -207,14 +387,30 @@ export interface FileRouteTypes {
     | '/org/policy'
   id:
     | '__root__'
-    | '/'
     | '/_authenticated'
+    | '/_public'
     | '/404'
     | '/500'
+    | '/_public/about'
+    | '/_public/privacy-policy'
+    | '/_public/user-agreement'
+    | '/_public/'
+    | '/_authenticated/usage-logs/audit'
+    | '/_public/pricing/$modelId'
+    | '/_authenticated/account/'
     | '/_authenticated/dashboard/'
     | '/_authenticated/keys/'
     | '/_authenticated/models/'
+    | '/_authenticated/playground/'
+    | '/_authenticated/rankings/'
+    | '/_authenticated/tasks/'
     | '/_authenticated/usage-logs/'
+    | '/_authenticated/wallet/'
+    | '/_public/pricing/'
+    | '/_authenticated/admin/settings/$section'
+    | '/_authenticated/admin/redemption-codes/'
+    | '/_authenticated/admin/settings/'
+    | '/_authenticated/admin/users/'
     | '/_authenticated/ops/channels/'
     | '/_authenticated/ops/overview/'
     | '/_authenticated/ops/rules/'
@@ -226,21 +422,14 @@ export interface FileRouteTypes {
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
+  PublicRouteRoute: typeof PublicRouteRouteWithChildren
   R404Route: typeof R404Route
   R500Route: typeof R500Route
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/404': {
       id: '/404'
       path: '/404'
@@ -261,6 +450,48 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof AuthenticatedRouteRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_public': {
+      id: '/_public'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof PublicRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_public/': {
+      id: '/_public/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof PublicIndexRouteImport
+      parentRoute: typeof PublicRouteRoute
+    }
+    '/_public/about': {
+      id: '/_public/about'
+      path: '/about'
+      fullPath: '/about'
+      preLoaderRoute: typeof PublicAboutRouteImport
+      parentRoute: typeof PublicRouteRoute
+    }
+    '/_public/privacy-policy': {
+      id: '/_public/privacy-policy'
+      path: '/privacy-policy'
+      fullPath: '/privacy-policy'
+      preLoaderRoute: typeof PublicPrivacyPolicyRouteImport
+      parentRoute: typeof PublicRouteRoute
+    }
+    '/_public/user-agreement': {
+      id: '/_public/user-agreement'
+      path: '/user-agreement'
+      fullPath: '/user-agreement'
+      preLoaderRoute: typeof PublicUserAgreementRouteImport
+      parentRoute: typeof PublicRouteRoute
+    }
+    '/_authenticated/account/': {
+      id: '/_authenticated/account/'
+      path: '/account'
+      fullPath: '/account/'
+      preLoaderRoute: typeof AuthenticatedAccountIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/dashboard/': {
       id: '/_authenticated/dashboard/'
@@ -283,11 +514,88 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedModelsIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/playground/': {
+      id: '/_authenticated/playground/'
+      path: '/playground'
+      fullPath: '/playground/'
+      preLoaderRoute: typeof AuthenticatedPlaygroundIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/rankings/': {
+      id: '/_authenticated/rankings/'
+      path: '/rankings'
+      fullPath: '/rankings/'
+      preLoaderRoute: typeof AuthenticatedRankingsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/tasks/': {
+      id: '/_authenticated/tasks/'
+      path: '/tasks'
+      fullPath: '/tasks/'
+      preLoaderRoute: typeof AuthenticatedTasksIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/usage-logs/': {
       id: '/_authenticated/usage-logs/'
       path: '/usage-logs'
       fullPath: '/usage-logs/'
       preLoaderRoute: typeof AuthenticatedUsageLogsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/usage-logs/audit': {
+      id: '/_authenticated/usage-logs/audit'
+      path: '/usage-logs/audit'
+      fullPath: '/usage-logs/audit'
+      preLoaderRoute: typeof AuthenticatedUsageLogsAuditRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/wallet/': {
+      id: '/_authenticated/wallet/'
+      path: '/wallet'
+      fullPath: '/wallet/'
+      preLoaderRoute: typeof AuthenticatedWalletIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_public/pricing/': {
+      id: '/_public/pricing/'
+      path: '/pricing'
+      fullPath: '/pricing/'
+      preLoaderRoute: typeof PublicPricingIndexRouteImport
+      parentRoute: typeof PublicRouteRoute
+    }
+    '/_public/pricing/$modelId': {
+      id: '/_public/pricing/$modelId'
+      path: '/pricing/$modelId'
+      fullPath: '/pricing/$modelId'
+      preLoaderRoute: typeof PublicPricingModelIdRouteImport
+      parentRoute: typeof PublicRouteRoute
+    }
+    '/_authenticated/admin/redemption-codes/': {
+      id: '/_authenticated/admin/redemption-codes/'
+      path: '/admin/redemption-codes'
+      fullPath: '/admin/redemption-codes/'
+      preLoaderRoute: typeof AuthenticatedAdminRedemptionCodesIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/admin/settings/': {
+      id: '/_authenticated/admin/settings/'
+      path: '/admin/settings'
+      fullPath: '/admin/settings/'
+      preLoaderRoute: typeof AuthenticatedAdminSettingsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/admin/settings/$section': {
+      id: '/_authenticated/admin/settings/$section'
+      path: '/admin/settings/$section'
+      fullPath: '/admin/settings/$section'
+      preLoaderRoute: typeof AuthenticatedAdminSettingsSectionRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/admin/users/': {
+      id: '/_authenticated/admin/users/'
+      path: '/admin/users'
+      fullPath: '/admin/users/'
+      preLoaderRoute: typeof AuthenticatedAdminUsersIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/ops/channels/': {
@@ -350,10 +658,20 @@ declare module '@tanstack/react-router' {
 }
 
 interface AuthenticatedRouteRouteChildren {
+  AuthenticatedUsageLogsAuditRoute: typeof AuthenticatedUsageLogsAuditRoute
+  AuthenticatedAccountIndexRoute: typeof AuthenticatedAccountIndexRoute
   AuthenticatedDashboardIndexRoute: typeof AuthenticatedDashboardIndexRoute
   AuthenticatedKeysIndexRoute: typeof AuthenticatedKeysIndexRoute
   AuthenticatedModelsIndexRoute: typeof AuthenticatedModelsIndexRoute
+  AuthenticatedPlaygroundIndexRoute: typeof AuthenticatedPlaygroundIndexRoute
+  AuthenticatedRankingsIndexRoute: typeof AuthenticatedRankingsIndexRoute
+  AuthenticatedTasksIndexRoute: typeof AuthenticatedTasksIndexRoute
   AuthenticatedUsageLogsIndexRoute: typeof AuthenticatedUsageLogsIndexRoute
+  AuthenticatedWalletIndexRoute: typeof AuthenticatedWalletIndexRoute
+  AuthenticatedAdminSettingsSectionRoute: typeof AuthenticatedAdminSettingsSectionRoute
+  AuthenticatedAdminRedemptionCodesIndexRoute: typeof AuthenticatedAdminRedemptionCodesIndexRoute
+  AuthenticatedAdminSettingsIndexRoute: typeof AuthenticatedAdminSettingsIndexRoute
+  AuthenticatedAdminUsersIndexRoute: typeof AuthenticatedAdminUsersIndexRoute
   AuthenticatedOpsChannelsIndexRoute: typeof AuthenticatedOpsChannelsIndexRoute
   AuthenticatedOpsOverviewIndexRoute: typeof AuthenticatedOpsOverviewIndexRoute
   AuthenticatedOpsRulesIndexRoute: typeof AuthenticatedOpsRulesIndexRoute
@@ -365,10 +683,22 @@ interface AuthenticatedRouteRouteChildren {
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
+  AuthenticatedUsageLogsAuditRoute: AuthenticatedUsageLogsAuditRoute,
+  AuthenticatedAccountIndexRoute: AuthenticatedAccountIndexRoute,
   AuthenticatedDashboardIndexRoute: AuthenticatedDashboardIndexRoute,
   AuthenticatedKeysIndexRoute: AuthenticatedKeysIndexRoute,
   AuthenticatedModelsIndexRoute: AuthenticatedModelsIndexRoute,
+  AuthenticatedPlaygroundIndexRoute: AuthenticatedPlaygroundIndexRoute,
+  AuthenticatedRankingsIndexRoute: AuthenticatedRankingsIndexRoute,
+  AuthenticatedTasksIndexRoute: AuthenticatedTasksIndexRoute,
   AuthenticatedUsageLogsIndexRoute: AuthenticatedUsageLogsIndexRoute,
+  AuthenticatedWalletIndexRoute: AuthenticatedWalletIndexRoute,
+  AuthenticatedAdminSettingsSectionRoute:
+    AuthenticatedAdminSettingsSectionRoute,
+  AuthenticatedAdminRedemptionCodesIndexRoute:
+    AuthenticatedAdminRedemptionCodesIndexRoute,
+  AuthenticatedAdminSettingsIndexRoute: AuthenticatedAdminSettingsIndexRoute,
+  AuthenticatedAdminUsersIndexRoute: AuthenticatedAdminUsersIndexRoute,
   AuthenticatedOpsChannelsIndexRoute: AuthenticatedOpsChannelsIndexRoute,
   AuthenticatedOpsOverviewIndexRoute: AuthenticatedOpsOverviewIndexRoute,
   AuthenticatedOpsRulesIndexRoute: AuthenticatedOpsRulesIndexRoute,
@@ -382,9 +712,31 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
 const AuthenticatedRouteRouteWithChildren =
   AuthenticatedRouteRoute._addFileChildren(AuthenticatedRouteRouteChildren)
 
+interface PublicRouteRouteChildren {
+  PublicAboutRoute: typeof PublicAboutRoute
+  PublicPrivacyPolicyRoute: typeof PublicPrivacyPolicyRoute
+  PublicUserAgreementRoute: typeof PublicUserAgreementRoute
+  PublicIndexRoute: typeof PublicIndexRoute
+  PublicPricingModelIdRoute: typeof PublicPricingModelIdRoute
+  PublicPricingIndexRoute: typeof PublicPricingIndexRoute
+}
+
+const PublicRouteRouteChildren: PublicRouteRouteChildren = {
+  PublicAboutRoute: PublicAboutRoute,
+  PublicPrivacyPolicyRoute: PublicPrivacyPolicyRoute,
+  PublicUserAgreementRoute: PublicUserAgreementRoute,
+  PublicIndexRoute: PublicIndexRoute,
+  PublicPricingModelIdRoute: PublicPricingModelIdRoute,
+  PublicPricingIndexRoute: PublicPricingIndexRoute,
+}
+
+const PublicRouteRouteWithChildren = PublicRouteRoute._addFileChildren(
+  PublicRouteRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
-  IndexRoute: IndexRoute,
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
+  PublicRouteRoute: PublicRouteRouteWithChildren,
   R404Route: R404Route,
   R500Route: R500Route,
 }

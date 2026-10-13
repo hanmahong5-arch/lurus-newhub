@@ -1,6 +1,14 @@
 import {
   BarChart3,
   Boxes,
+  CircleUserRound,
+  FlaskConical,
+  ListChecks,
+  Settings,
+  Ticket,
+  Trophy,
+  UserCog,
+  Wallet,
   FolderTree,
   KeyRound,
   KeySquare,
@@ -19,12 +27,21 @@ import type { UserAccess } from '@/lib/user'
 
 export interface NavItem {
   id: string
-  /** Route path relative to the router basepath (/next). */
+  /** Route path (the console owns the site root; assets stay under /next/). */
   to:
     | '/dashboard'
+    | '/playground'
     | '/keys'
     | '/usage-logs'
+    | '/usage-logs/audit'
+    | '/tasks'
     | '/models'
+    | '/rankings'
+    | '/wallet'
+    | '/account'
+    | '/admin/redemption-codes'
+    | '/admin/users'
+    | '/admin/settings'
     | '/org/members'
     | '/org/departments'
     | '/org/keys-batch'
@@ -41,7 +58,7 @@ export interface NavItem {
 }
 
 export interface NavGroup {
-  id: 'workspace' | 'org' | 'ops'
+  id: 'workspace' | 'personal' | 'org' | 'ops'
   /** English source string; translated at render time. */
   label: string
   items: readonly NavItem[]
@@ -60,6 +77,13 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         requires: 'everyone',
       },
       {
+        id: 'playground',
+        to: '/playground',
+        label: 'Playground',
+        icon: FlaskConical,
+        requires: 'everyone',
+      },
+      {
         id: 'keys',
         to: '/keys',
         label: 'API Keys',
@@ -74,10 +98,44 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         requires: 'everyone',
       },
       {
+        id: 'tasks',
+        to: '/tasks',
+        label: 'Async Tasks',
+        icon: ListChecks,
+        requires: 'everyone',
+      },
+      {
         id: 'models',
         to: '/models',
         label: 'Models',
         icon: Boxes,
+        requires: 'everyone',
+      },
+      {
+        id: 'rankings',
+        to: '/rankings',
+        label: 'Rankings',
+        icon: Trophy,
+        requires: 'tenantAdmin',
+      },
+    ],
+  },
+  {
+    id: 'personal',
+    label: 'Personal',
+    items: [
+      {
+        id: 'wallet',
+        to: '/wallet',
+        label: 'Wallet',
+        icon: Wallet,
+        requires: 'everyone',
+      },
+      {
+        id: 'account',
+        to: '/account',
+        label: 'Account & Security',
+        icon: CircleUserRound,
         requires: 'everyone',
       },
     ],
@@ -121,6 +179,20 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: ShieldCheck,
         requires: 'tenantAdmin',
       },
+      {
+        id: 'org-audit',
+        to: '/usage-logs/audit',
+        label: 'Audit Log',
+        icon: ScrollText,
+        requires: 'tenantAdmin',
+      },
+      {
+        id: 'redemption-codes',
+        to: '/admin/redemption-codes',
+        label: 'Redemption Codes',
+        icon: Ticket,
+        requires: 'tenantAdmin',
+      },
     ],
   },
   {
@@ -146,6 +218,20 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         to: '/ops/rules',
         label: 'Platform Rules & Templates',
         icon: SlidersHorizontal,
+        requires: 'platformStaff',
+      },
+      {
+        id: 'admin-users',
+        to: '/admin/users',
+        label: 'Users',
+        icon: UserCog,
+        requires: 'platformStaff',
+      },
+      {
+        id: 'admin-settings',
+        to: '/admin/settings',
+        label: 'System Settings',
+        icon: Settings,
         requires: 'platformStaff',
       },
     ],

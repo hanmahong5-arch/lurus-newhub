@@ -39,7 +39,7 @@ const queryClient = createAppQueryClient(() => {
   void router.navigate({ to: '/500' })
 })
 
-// The console is served under /next/ (web-router.go), hence the basepath.
+// The console owns the site root (web-router.go); see APP_BASEPATH.
 const router = createRouter({
   routeTree,
   basepath: APP_BASEPATH,
