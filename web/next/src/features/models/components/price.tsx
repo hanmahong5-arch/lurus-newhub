@@ -2,21 +2,35 @@ import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 
 import {
   capabilityLabelKey,
   hasPrice,
   modalityLabelKey,
+  perUnit,
+  priceTypeLabelKey,
+  priceTypeOf,
   type ModelEntry,
 } from '../lib/catalog';
 import { usePriceFormatter } from './price-format';
+import { usePriceUnit } from './price-unit';
 
-/** One price value; zero, missing or unparsable is "Unpriced", never $0. */
+/**
+ * One price value. Zero, missing or unparsable is "Price not configured",
+ * never $0 and never "free": nobody priced the model.
+ */
 export function PriceValue(props: { value: number | null | undefined }) {
   const { t } = useTranslation();
   const fmt = usePriceFormatter();
   const text = fmt(props.value);
-  return text ?? <span className='text-muted-foreground'>{t('Unpriced')}</span>;
+  return (
+    text ?? (
+      <span className='text-muted-foreground font-sans text-xs font-normal'>
+        {t('Price not configured')}
+      </span>
+    )
+  );
 }
 
 /**
@@ -58,64 +72,125 @@ export function UsageUnitLabel(props: { entry: ModelEntry }) {
 /** Output column: an input-only model bills no output, which is not "unpriced". */
 export function OutputPriceValue(props: { entry: ModelEntry }) {
   const { t } = useTranslation();
+  const unit = usePriceUnit();
   if (props.entry.inputOnly && hasPrice(props.entry)) {
     return <span className='text-muted-foreground'>{t('Not billed')}</span>;
   }
-  return <PriceValue value={props.entry.outputPerM} />;
+  return <PriceValue value={perUnit(props.entry.outputPerM, unit)} />;
 }
 
-/** Compact price strip used on cards. */
-export function PriceLine(props: { entry: ModelEntry }) {
+/** How the model is billed; an unpriced model says so instead of a price. */
+export function BillingModeBadge(props: {
+  entry: ModelEntry;
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  const kind = priceTypeOf(props.entry);
+  return (
+    <Badge
+      variant={kind === 'unpriced' ? 'outline' : 'secondary'}
+      className={props.className}
+      data-testid={`model-billing-${props.entry.id}`}
+    >
+      {t(priceTypeLabelKey(kind))}
+    </Badge>
+  );
+}
+
+function PriceCell(props: {
+  label: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className={cn('flex min-w-0 flex-col gap-1', props.className)}>
+      <span className='text-muted-foreground text-xs'>{props.label}</span>
+      <span className='flex flex-wrap items-baseline gap-x-1 font-mono text-sm font-semibold tabular-nums'>
+        {props.children}
+      </span>
+    </div>
+  );
+}
+
+/** Per-unit suffix, e.g. " / 1M". */
+function UnitSuffix(props: { children: ReactNode }) {
+  return (
+    <span className='text-muted-foreground text-xs font-normal whitespace-nowrap'>
+      {' '}
+      / {props.children}
+    </span>
+  );
+}
+
+/** Price summary used on cards: input / output / cached, or a single price. */
+export function PriceGrid(props: { entry: ModelEntry }) {
   const { t } = useTranslation();
   const fmt = usePriceFormatter();
+  const unit = usePriceUnit();
   const e = props.entry;
+  const unitLabel = unit === 'K' ? '1K' : '1M';
+  const id = `model-price-${e.id}`;
+
   if (e.usageUnit === 'search_unit') {
     return (
-      <Badge variant='secondary' data-testid={`model-price-${e.id}`}>
-        <SearchUnitPriceValue value={e.searchUnitPrice} /> {t('/search unit')}
-      </Badge>
+      <div data-testid={id}>
+        <PriceCell label={t('Price per search unit')} className='col-span-full'>
+          <SearchUnitPriceValue value={e.searchUnitPrice} />
+          <UnitSuffix>{t('search unit')}</UnitSuffix>
+        </PriceCell>
+      </div>
     );
   }
   if (!hasPrice(e)) {
     return (
-      <Badge variant='outline' data-testid={`model-price-${e.id}`}>
-        {t('Unpriced')}
-      </Badge>
+      <div data-testid={id} className='text-muted-foreground text-sm'>
+        {t('Price not configured')}
+      </div>
     );
   }
   if (e.quotaType === 1) {
     return (
-      <Badge variant='secondary' data-testid={`model-price-${e.id}`}>
-        {fmt(e.perCall)} {t('per call')}
-      </Badge>
+      <div data-testid={id}>
+        <PriceCell label={t('Price per call')}>
+          {fmt(e.perCall)}
+          <UnitSuffix>{t('request')}</UnitSuffix>
+        </PriceCell>
+      </div>
     );
   }
-  let outputBadge: ReactNode = null;
-  if (e.inputOnly) {
-    outputBadge = <Badge variant='outline'>{t('Output not billed')}</Badge>;
-  } else if (fmt(e.outputPerM)) {
-    outputBadge = (
-      <Badge variant='secondary'>
-        {fmt(e.outputPerM)} {t('/M output')}
-      </Badge>
-    );
-  }
+  const input = perUnit(e.inputPerM, unit);
+  const output = perUnit(e.outputPerM, unit);
+  const cache = perUnit(e.cacheReadPerM, unit);
   return (
-    <span
-      className='flex flex-wrap items-center gap-1.5'
-      data-testid={`model-price-${e.id}`}
+    <div
+      data-testid={id}
+      className='grid grid-cols-[repeat(auto-fit,minmax(88px,1fr))] gap-x-3 gap-y-2'
     >
-      <Badge variant='secondary'>
-        {fmt(e.inputPerM)} {t('/M input')}
-      </Badge>
-      {outputBadge}
-      {fmt(e.cacheReadPerM) && (
-        <Badge variant='outline'>
-          {t('cache read')} {fmt(e.cacheReadPerM)}
-          {t('/M')}
-        </Badge>
+      <PriceCell label={t('Input')}>
+        {fmt(input)}
+        <UnitSuffix>{unitLabel}</UnitSuffix>
+      </PriceCell>
+      {e.inputOnly ? (
+        <PriceCell label={t('Output')}>
+          <span className='text-muted-foreground font-sans text-xs font-normal'>
+            {t('Output not billed')}
+          </span>
+        </PriceCell>
+      ) : (
+        fmt(output) && (
+          <PriceCell label={t('Output')}>
+            {fmt(output)}
+            <UnitSuffix>{unitLabel}</UnitSuffix>
+          </PriceCell>
+        )
       )}
-    </span>
+      {fmt(cache) && (
+        <PriceCell label={t('Cached')}>
+          {fmt(cache)}
+          <UnitSuffix>{unitLabel}</UnitSuffix>
+        </PriceCell>
+      )}
+    </div>
   );
 }
 

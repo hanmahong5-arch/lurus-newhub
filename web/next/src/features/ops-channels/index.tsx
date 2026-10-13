@@ -1,159 +1,76 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { Network, Upload } from 'lucide-react'
-import { useState, type FormEvent } from 'react'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { EmptyState } from '@/components/empty-state'
-import { ErrorState } from '@/components/error-state'
-import { PageHeader } from '@/components/layout/page-header'
-import { LoadingState } from '@/components/loading-state'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { toApiError } from '@/lib/api'
-import { currentUserQueryOptions, userAccess } from '@/lib/user'
+import { SectionPageLayout } from '@/components/section-page-layout'
 
-import { channelListQueryOptions, PAGE_SIZE } from './api'
-import { ChannelDrawer } from './components/channel-drawer'
+import { getChannels, requireServerSuccess } from './api'
+import { ChannelsDialogs } from './components/channels-dialogs'
+import { ChannelsPrimaryButtons } from './components/channels-primary-buttons'
+import { ChannelsProvider } from './components/channels-provider'
 import { ChannelsTable } from './components/channels-table'
 import { ImportWizard } from './components/import-wizard'
-import type { ChannelListItem } from './types'
+import { useChannelAccess } from './hooks/use-channel-access'
+import { channelsQueryKeys } from './lib'
+
+/**
+ * Multi-key channels that bulk-imported keys can be appended to. The list
+ * payload already says which channels are multi-key, so this is one request.
+ */
+function ImportHost(props: { onClose: () => void }) {
+  const list = useQuery({
+    queryKey: [...channelsQueryKeys.all, 'import-targets'],
+    queryFn: async () =>
+      requireServerSuccess(await getChannels({ p: 1, page_size: 100 })),
+    gcTime: 0,
+  })
+  const targets = (list.data?.data?.items ?? [])
+    .filter((c) => c.channel_info?.is_multi_key === true)
+    .map((c) => ({ id: c.id, name: c.name }))
+  return <ImportWizard targets={targets} onClose={props.onClose} />
+}
 
 export function OpsChannelsPage() {
   const { t } = useTranslation()
-  const [page, setPage] = useState(1)
-  const [keywordInput, setKeywordInput] = useState('')
-  const [keyword, setKeyword] = useState('')
-  const [open, setOpen] = useState<ChannelListItem | null>(null)
   const [importing, setImporting] = useState(false)
-
-  const user = useQuery(currentUserQueryOptions)
   // UI hygiene only: every endpoint re-checks platform staff on the server.
-  const canWrite = userAccess(user.data).isPlatformStaff
-
-  const list = useQuery({
-    ...channelListQueryOptions(page, keyword),
-    placeholderData: keepPreviousData,
-  })
-
-  const channels = list.data?.items ?? []
-  const total = list.data?.total ?? 0
-  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
-  const nowSec = Math.floor(Date.now() / 1000)
-
-  const search = (e: FormEvent) => {
-    e.preventDefault()
-    setPage(1)
-    setKeyword(keywordInput.trim())
-  }
-
-  let body
-  if (list.isPending) {
-    body = <LoadingState />
-  } else if (list.isError && list.data === undefined) {
-    // A failed read is an error, never an empty list.
-    body = (
-      <ErrorState
-        title={t('Could not load channels')}
-        description={toApiError(list.error).message}
-        onRetry={() => void list.refetch()}
-      />
-    )
-  } else if (channels.length === 0 && page === 1) {
-    body = (
-      <EmptyState
-        icon={Network}
-        title={keyword !== '' ? t('No channel matches') : t('No channels yet')}
-        description={
-          keyword !== ''
-            ? t('Try a different keyword.')
-            : t('Import keys to create the first channels.')
-        }
-        bordered
-      />
-    )
-  } else {
-    body = (
-      <div className='grid min-w-0 gap-3' data-testid='channels-body'>
-        <div className='min-w-0 rounded-lg border'>
-          <ChannelsTable
-            channels={channels}
-            nowSec={nowSec}
-            onOpen={setOpen}
-          />
-        </div>
-        <div className='flex flex-wrap items-center justify-between gap-2 text-sm'>
-          <span className='text-muted-foreground'>
-            {t('{{count}} channels in total', { count: total })}
-          </span>
-          <div className='flex items-center gap-2'>
-            <Button
-              variant='outline'
-              size='sm'
-              disabled={page <= 1}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-            >
-              {t('Previous')}
-            </Button>
-            <span>
-              {t('Page {{page}} of {{pages}}', { page, pages: pageCount })}
-            </span>
-            <Button
-              variant='outline'
-              size='sm'
-              disabled={page >= pageCount}
-              onClick={() => setPage((p) => p + 1)}
-            >
-              {t('Next')}
-            </Button>
-          </div>
-        </div>
-        {list.isError && (
-          <p role='alert' className='text-destructive text-sm'>
-            {t('Refreshing the list failed: {{message}}', {
-              message: toApiError(list.error).message,
-            })}
-          </p>
-        )}
-      </div>
-    )
-  }
+  const { canEditSensitive } = useChannelAccess()
 
   return (
-    <>
-      <PageHeader
-        title={t('Channels & Account Pools')}
-        description={t(
-          'Upstream accounts, their health, usage and plan settings.'
-        )}
-        actions={
-          canWrite ? (
-            <Button onClick={() => setImporting(true)}>
-              <Upload />
-              {t('Bulk import')}
-            </Button>
-          ) : undefined
-        }
-      />
-      <form onSubmit={search} className='flex max-w-md gap-2'>
-        <Input
-          value={keywordInput}
-          onChange={(e) => setKeywordInput(e.target.value)}
-          placeholder={t('Search channels by keyword')}
-          aria-label={t('Search channels')}
-        />
-        <Button type='submit' variant='outline'>
-          {t('Search')}
-        </Button>
-      </form>
-      {body}
-      <ChannelDrawer
-        channel={open}
-        canWrite={canWrite}
-        onClose={() => setOpen(null)}
-      />
-      {importing && (
-        <ImportWizard channels={channels} onClose={() => setImporting(false)} />
-      )}
-    </>
+    <ChannelsProvider>
+      <SectionPageLayout fixedContent>
+        <SectionPageLayout.Title>
+          {t('Channels & Account Pools')}
+        </SectionPageLayout.Title>
+        <SectionPageLayout.Actions>
+          <ChannelsPrimaryButtons
+            onImport={canEditSensitive ? () => setImporting(true) : undefined}
+          />
+        </SectionPageLayout.Actions>
+        <SectionPageLayout.Content>
+          <ChannelsTable />
+        </SectionPageLayout.Content>
+      </SectionPageLayout>
+      <ChannelsDialogs />
+      {importing && <ImportHost onClose={() => setImporting(false)} />}
+    </ChannelsProvider>
   )
 }

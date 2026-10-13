@@ -1,4 +1,22 @@
-import { useMutation, useQueries, useQueryClient } from '@tanstack/react-query'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -32,7 +50,6 @@ import { Textarea } from '@/components/ui/textarea'
 import { toApiError } from '@/lib/api'
 
 import {
-  channelDetailQueryOptions,
   channelsQueryKey,
   importChannelKeys,
 } from '../api'
@@ -50,7 +67,7 @@ import {
   IMPORT_CODE_LABELS,
   MAX_IMPORT_ITEMS,
 } from '../lib/map'
-import type { ChannelListItem, ImportOutcome, ImportRow } from '../types'
+import type { ImportOutcome, ImportRow } from '../types'
 import { Field } from './shared'
 
 type Step = 'input' | 'preview' | 'result'
@@ -129,8 +146,8 @@ function ResultTable(props: { rows: ImportRow[]; committed: boolean }) {
 }
 
 export function ImportWizard(props: {
-  /** Channels on the current page; multi-key ones become append targets. */
-  channels: ChannelListItem[]
+  /** Multi-key channels keys can be appended to (from the list payload). */
+  targets: Array<{ id: number; name: string }>
   onClose: () => void
 }) {
   const { t } = useTranslation()
@@ -143,12 +160,7 @@ export function ImportWizard(props: {
   const [preview, setPreview] = useState<ImportOutcome | null>(null)
   const [result, setResult] = useState<ImportOutcome | null>(null)
 
-  const details = useQueries({
-    queries: props.channels.map((c) => channelDetailQueryOptions(c.id)),
-  })
-  const targets = props.channels.filter(
-    (_c, i) => details[i]?.data?.isMultiKey === true
-  )
+  const targets = props.targets
 
   const set = <K extends keyof ImportForm>(k: K, v: ImportForm[K]) => {
     setForm((f) => ({ ...f, [k]: v }))
@@ -176,6 +188,7 @@ export function ImportWizard(props: {
       setResult(o)
       setStep('result')
       await qc.invalidateQueries({ queryKey: channelsQueryKey })
+      await qc.invalidateQueries({ queryKey: ['channels'] })
     },
     onError: fail,
   })

@@ -30,7 +30,7 @@ export interface KeyFormValues {
   models: string
   allowIps: string
   projectId: string
-  /** yyyy-mm-dd, '' = never expires. */
+  /** Local `yyyy-mm-ddTHH:mm` (or a bare `yyyy-mm-dd`), '' = never expires. */
   expiry: string
 }
 
@@ -55,11 +55,46 @@ export function unixToDateInput(sec: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
-/** End of the chosen local day, so "expires today" still works all day. */
+/** Unix seconds -> local `yyyy-mm-ddTHH:mm` (minute precision), '' = none. */
+export function unixToDateTimeInput(sec: number): string {
+  if (!(sec > 0)) return ''
+  const d = new Date(sec * 1000)
+  return `${unixToDateInput(sec)}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/**
+ * A bare date means the end of that local day, so "expires today" still works
+ * all day; a `yyyy-mm-ddTHH:mm` value is taken as that exact local minute.
+ */
 export function dateInputToUnix(value: string): number {
   if (!value) return -1
-  const ms = new Date(`${value}T23:59:59`).getTime()
+  const text = value.includes('T') ? `${value}:00` : `${value}T23:59:59`
+  const ms = new Date(text).getTime()
   return Number.isFinite(ms) ? Math.floor(ms / 1000) : Number.NaN
+}
+
+/** Expiry form value for "now + months/days/hours" (the quick presets). */
+export function expiryAfter(
+  from: Date,
+  offset: { months?: number; days?: number; hours?: number }
+): string {
+  const d = new Date(from)
+  d.setMonth(d.getMonth() + (offset.months ?? 0))
+  d.setDate(d.getDate() + (offset.days ?? 0))
+  d.setHours(d.getHours() + (offset.hours ?? 0))
+  return unixToDateTimeInput(Math.floor(d.getTime() / 1000))
+}
+
+export function expiryToDate(value: string): Date | undefined {
+  if (!value) return undefined
+  const ms = new Date(
+    value.includes('T') ? `${value}:00` : `${value}T23:59:59`
+  ).getTime()
+  return Number.isFinite(ms) ? new Date(ms) : undefined
+}
+
+export function dateToExpiry(date: Date | undefined): string {
+  return date ? unixToDateTimeInput(Math.floor(date.getTime() / 1000)) : ''
 }
 
 export function formFromToken(
@@ -76,7 +111,7 @@ export function formFromToken(
     models: token.model_limits,
     allowIps: token.allow_ips,
     projectId: token.project_id > 0 ? String(token.project_id) : '',
-    expiry: unixToDateInput(token.expired_time),
+    expiry: unixToDateTimeInput(token.expired_time),
   }
 }
 
@@ -90,11 +125,13 @@ export type FormError =
 /**
  * Form -> request body. `usedQuota` is the key's current spend (0 on create):
  * the cap field is the TOTAL, the server stores the REMAINING.
+ * `originalExpiry` is the key's stored expiry (edit only).
  */
 export function buildWriteBody(
   form: KeyFormValues,
   config: MoneyConfig | null,
-  usedQuota: number
+  usedQuota: number,
+  originalExpiry = -1
 ): { ok: true; body: TokenWriteBody } | { ok: false; error: FormError } {
   const name = form.name.trim()
   if (name === '') return { ok: false, error: 'name' }
@@ -111,8 +148,13 @@ export function buildWriteBody(
     remain = Math.max(0, cap.quota - usedQuota)
   }
 
-  const expired = dateInputToUnix(form.expiry)
+  let expired = dateInputToUnix(form.expiry)
   if (Number.isNaN(expired)) return { ok: false, error: 'expiry' }
+  // The form only has minute precision: an untouched expiry keeps its exact
+  // stored second instead of drifting on every unrelated edit.
+  if (originalExpiry > 0 && unixToDateTimeInput(originalExpiry) === form.expiry) {
+    expired = originalExpiry
+  }
 
   const models = form.models.trim()
   if (form.limitModels && models === '') return { ok: false, error: 'models' }

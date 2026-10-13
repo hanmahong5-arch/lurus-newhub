@@ -5,7 +5,12 @@ import {
   filterCatalog,
   formatPrice,
   hasPrice,
+  modalityFacets,
+  perUnit,
+  priceTypeCounts,
+  priceTypeOf,
   sortCatalog,
+  tagFacets,
   usdPerRatio,
   vendorFacets,
 } from './catalog';
@@ -269,5 +274,135 @@ describe('buildCatalog modality and search-unit price', () => {
       hasPrice(row({ usage_unit: 'search_unit', search_unit_price: 0 })),
     ).toBe(true);
     expect(hasPrice(row({ usage_unit: 'search_unit' }))).toBe(false);
+  });
+});
+
+describe('buildCatalog facets and filters', () => {
+  const entries = buildCatalog({
+    usdPerRatio: 2,
+    pricing: [
+      {
+        model_name: 'tok',
+        vendor: 'V1',
+        model_ratio: 1,
+        tags: 'Fast, chat',
+        modality: 'chat',
+        icon: 'brand-a',
+        enable_groups: ['vip', 'default'],
+        supported_endpoint_types: [WIRE_CHAT],
+      },
+      {
+        model_name: 'call',
+        vendor: 'V2',
+        quota_type: 1,
+        model_price: 0.1,
+        tags: 'chat',
+        modality: 'image',
+        enable_groups: ['default'],
+      },
+      { model_name: 'zero', vendor: 'V2', model_ratio: 0 },
+      {
+        model_name: 'cfg-off',
+        vendor: 'V2',
+        model_ratio: 5,
+        price_configured: false,
+      },
+      {
+        model_name: 'su',
+        usage_unit: 'search_unit',
+        search_unit_price: 0.002,
+      },
+    ],
+  });
+  const ids = (list: { id: string }[]) => list.map((e) => e.id).sort();
+
+  it('carries the icon key and groups from the API, never from the name', () => {
+    const e = entries.find((x) => x.id === 'tok');
+    expect(e?.icon).toBe('brand-a');
+    expect(e?.groups).toEqual(['vip', 'default']);
+    expect(entries.find((x) => x.id === 'zero')?.icon).toBe('');
+  });
+
+  it('classifies billing kinds; zero and price_configured=false are unpriced', () => {
+    const kind = (id: string) => {
+      const e = entries.find((x) => x.id === id);
+      if (!e) throw new Error(`missing ${id}`);
+      return priceTypeOf(e);
+    };
+    expect(kind('tok')).toBe('token');
+    expect(kind('call')).toBe('request');
+    expect(kind('su')).toBe('search_unit');
+    expect(kind('zero')).toBe('unpriced');
+    expect(kind('cfg-off')).toBe('unpriced');
+    expect(priceTypeCounts(entries)).toEqual({
+      token: 1,
+      request: 1,
+      search_unit: 1,
+      unpriced: 2,
+    });
+  });
+
+  it('builds tag and modality facets case-insensitively', () => {
+    expect(tagFacets(entries)).toEqual([
+      { tag: 'chat', count: 2 },
+      { tag: 'fast', count: 1 },
+    ]);
+    expect(modalityFacets(entries)).toEqual([
+      { modality: 'chat', count: 1 },
+      { modality: 'image', count: 1 },
+    ]);
+  });
+
+  it('filters by tag, modality, billing kind and group', () => {
+    expect(ids(filterCatalog(entries, { tags: ['FAST'] }))).toEqual(['tok']);
+    expect(ids(filterCatalog(entries, { tags: ['chat', 'fast'] }))).toEqual([
+      'tok',
+    ]);
+    expect(ids(filterCatalog(entries, { modalities: ['image'] }))).toEqual([
+      'call',
+    ]);
+    expect(ids(filterCatalog(entries, { priceType: 'unpriced' }))).toEqual([
+      'cfg-off',
+      'zero',
+    ]);
+    expect(ids(filterCatalog(entries, { group: 'vip' }))).toEqual(['tok']);
+    expect(ids(filterCatalog(entries, { group: 'default' }))).toEqual([
+      'call',
+      'tok',
+    ]);
+  });
+
+  it('sorts price descending with unpriced last, and by reliability', () => {
+    const priced = buildCatalog({
+      usdPerRatio: 2,
+      pricing: [
+        { model_name: 'a', model_ratio: 1 },
+        { model_name: 'b', model_ratio: 3 },
+        { model_name: 'c', model_ratio: 0 },
+      ],
+      performance: [
+        { model_name: 'a', error_rate: 0.05, enough_samples: true },
+        { model_name: 'b', error_rate: 0, enough_samples: true },
+        { model_name: 'c', error_rate: 0.9, enough_samples: false },
+      ],
+    });
+    expect(sortCatalog(priced, 'input_desc').map((e) => e.id)).toEqual([
+      'b',
+      'a',
+      'c',
+    ]);
+    // 0% errors beats 5%; the unmeasured one is last whatever its raw rate
+    expect(sortCatalog(priced, 'reliable').map((e) => e.id)).toEqual([
+      'b',
+      'a',
+      'c',
+    ]);
+  });
+
+  it('converts per-1M prices to per-1K without inventing a value', () => {
+    expect(perUnit(2, 'M')).toBe(2);
+    expect(perUnit(2, 'K')).toBe(0.002);
+    expect(perUnit(null, 'K')).toBeNull();
+    expect(perUnit(Number.NaN, 'M')).toBeNull();
   });
 });

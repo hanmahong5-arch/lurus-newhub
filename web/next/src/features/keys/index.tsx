@@ -22,22 +22,26 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
+import type {
+  OnChangeFn,
+  PaginationState,
+  RowSelectionState,
+} from '@tanstack/react-table'
 import { KeyRound, Plus } from 'lucide-react'
-import { useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { EmptyState } from '@/components/empty-state'
 import { ErrorState } from '@/components/error-state'
-import { PageHeader } from '@/components/layout/page-header'
+import { SectionPageLayout } from '@/components/section-page-layout'
 import { LoadingState } from '@/components/loading-state'
 import { Button } from '@/components/ui/button'
 import { toApiError } from '@/lib/api'
 import { useMoneyConfig } from '@/lib/status'
 
 import {
-  PAGE_SIZE,
   createToken,
   deleteToken,
   deleteTokens,
@@ -47,8 +51,10 @@ import {
   tokenListQueryOptions,
   updateToken,
 } from './api'
-import { KeyFormDialog } from './components/key-form-dialog'
+import { ApiAddresses } from './components/api-addresses'
+import { KeyFormSheet } from './components/key-form-sheet'
 import { KeySecretDialog } from './components/key-secret-dialog'
+import type { KeyRowHandlers } from './components/key-row-actions'
 import { KeysTable } from './components/keys-table'
 import { SnippetsDialog } from './components/snippets-dialog'
 import {
@@ -66,42 +72,65 @@ type Dialog =
   | { kind: 'snippets'; token: ApiToken }
   | { kind: 'rotate'; token: ApiToken }
   | { kind: 'delete'; token: ApiToken }
-  | { kind: 'delete-many' }
+  | { kind: 'delete-many'; ids: number[] }
   | null
+
+const DEFAULT_PAGE_SIZE = 20
 
 export function KeysPage() {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const money = useMoneyConfig()
-  const [page, setPage] = useState(1)
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: DEFAULT_PAGE_SIZE,
+  })
   const [dialog, setDialog] = useState<Dialog>(null)
-  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
   const [busyId, setBusyId] = useState<number | null>(null)
   // Plaintext keys exist only in memory, from create / rotate; the list
   // endpoint returns masked keys, so a reload forgets them by design.
   const [secrets, setSecrets] = useState<Record<number, string>>({})
 
   const list = useQuery({
-    ...tokenListQueryOptions(page, PAGE_SIZE),
+    ...tokenListQueryOptions(pagination.pageIndex + 1, pagination.pageSize),
     placeholderData: keepPreviousData,
   })
   const projects = useQuery(projectsQueryOptions)
 
-  // Selection is per page: a batch delete is capped at 100 ids server-side.
-  const goPage = (next: number) => {
-    setSelected(new Set())
-    setPage(next)
-  }
+  const projectNames = useMemo(
+    () => new Map((projects.data ?? []).map((p) => [p.id, p.name])),
+    [projects.data]
+  )
 
-  const refresh = () => qc.invalidateQueries({ queryKey: keysQueryKey })
+  // Selection is per page: a batch delete is capped at 100 ids server-side.
+  const onPaginationChange: OnChangeFn<PaginationState> = useCallback(
+    (updater) => {
+      setRowSelection({})
+      setPagination((prev) =>
+        typeof updater === 'function' ? updater(prev) : updater
+      )
+    },
+    []
+  )
+  // After a delete the current page may no longer exist: step back.
+  const ensurePageInRange = useCallback((pageCount: number) => {
+    const last = Math.max(0, pageCount - 1)
+    setPagination((prev) =>
+      prev.pageIndex > last ? { ...prev, pageIndex: last } : prev
+    )
+  }, [])
+
+  const refresh = useCallback(
+    () => qc.invalidateQueries({ queryKey: keysQueryKey }),
+    [qc]
+  )
   const fail = (e: unknown) => {
     toast.error(toApiError(e).message)
   }
 
   const tokens = list.data?.items ?? []
   const total = list.data?.total ?? 0
-  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
-  const nowSec = Math.floor(Date.now() / 1000)
 
   const remember = (issued: IssuedKey) =>
     setSecrets((s) => ({ ...s, [issued.id]: issued.key }))
@@ -134,9 +163,17 @@ export function KeysPage() {
       }),
     onMutate: (v) => setBusyId(v.token.id),
     onSettled: () => setBusyId(null),
-    onSuccess: refresh,
+    onSuccess: async (_d, v) => {
+      toast.success(v.enable ? t('Key enabled') : t('Key disabled'))
+      await refresh()
+    },
     onError: fail,
   })
+  const { mutate: mutateToggle } = toggle
+  const onToggleStatus = useCallback(
+    (token: ApiToken, enable: boolean) => mutateToggle({ token, enable }),
+    [mutateToggle]
+  )
 
   const rotate = useMutation({
     mutationFn: (token: ApiToken) => rotateToken(token.id),
@@ -152,9 +189,9 @@ export function KeysPage() {
     mutationFn: (token: ApiToken) => deleteToken(token.id),
     onSuccess: async (_d, token) => {
       toast.success(t('Key deleted'))
-      setSelected((s) => {
-        const next = new Set(s)
-        next.delete(token.id)
+      setRowSelection((s) => {
+        const next = { ...s }
+        delete next[String(token.id)]
         return next
       })
       setDialog(null)
@@ -167,34 +204,32 @@ export function KeysPage() {
     mutationFn: (ids: number[]) => deleteTokens(ids),
     onSuccess: async () => {
       toast.success(t('Keys deleted'))
-      setSelected(new Set())
+      setRowSelection({})
       setDialog(null)
       await refresh()
     },
     onError: fail,
   })
 
-  const header = (
-    <PageHeader
-      title={t('API Keys')}
-      description={t('Keys your applications use to call the models.')}
-      actions={
-        <div className='flex flex-wrap gap-2'>
-          {selected.size > 0 && (
-            <Button
-              variant='destructive'
-              onClick={() => setDialog({ kind: 'delete-many' })}
-            >
-              {t('Delete selected ({{count}})', { count: selected.size })}
-            </Button>
-          )}
-          <Button onClick={() => setDialog({ kind: 'create' })}>
-            <Plus />
-            {t('Create key')}
-          </Button>
-        </div>
-      }
-    />
+  const handlers = useMemo<KeyRowHandlers>(
+    () => ({
+      onEdit: (token) => setDialog({ kind: 'edit', token }),
+      onSnippets: (token) => setDialog({ kind: 'snippets', token }),
+      onRotate: (token) => setDialog({ kind: 'rotate', token }),
+      onDelete: (token) => setDialog({ kind: 'delete', token }),
+    }),
+    []
+  )
+  const onBulkDelete = useCallback(
+    (ids: number[]) => setDialog({ kind: 'delete-many', ids }),
+    []
+  )
+
+  const createButton = (
+    <Button size='sm' onClick={() => setDialog({ kind: 'create' })}>
+      <Plus />
+      {t('Create key')}
+    </Button>
   )
 
   let body
@@ -209,104 +244,67 @@ export function KeysPage() {
         onRetry={() => void list.refetch()}
       />
     )
-  } else if (tokens.length === 0 && page === 1) {
+  } else if (tokens.length === 0 && total === 0 && pagination.pageIndex === 0) {
     body = (
       <EmptyState
         icon={KeyRound}
         title={t('No API keys yet')}
         description={t('Create a key to start calling the models.')}
         bordered
-        action={
-          <Button onClick={() => setDialog({ kind: 'create' })}>
-            <Plus />
-            {t('Create key')}
-          </Button>
-        }
+        action={createButton}
       />
     )
   } else {
     body = (
-      <div className='grid min-w-0 gap-3' data-testid='keys-body'>
-        <div className='min-w-0 rounded-lg border' data-testid='keys-table-box'>
-          <KeysTable
-            tokens={tokens}
-            money={money}
-            nowSec={nowSec}
-            secrets={secrets}
-            selected={selected}
-            busyId={busyId}
-            onToggleSelect={(id, on) =>
-              setSelected((s) => {
-                const next = new Set(s)
-                if (on) next.add(id)
-                else next.delete(id)
-                return next
-              })
-            }
-            onToggleAll={(on) =>
-              setSelected((s) => {
-                const next = new Set(s)
-                for (const k of tokens) {
-                  if (on) next.add(k.id)
-                  else next.delete(k.id)
-                }
-                return next
-              })
-            }
-            onToggleStatus={(token, enable) => toggle.mutate({ token, enable })}
-            onEdit={(token) => setDialog({ kind: 'edit', token })}
-            onSnippets={(token) => setDialog({ kind: 'snippets', token })}
-            onRotate={(token) => setDialog({ kind: 'rotate', token })}
-            onDelete={(token) => setDialog({ kind: 'delete', token })}
-          />
-        </div>
-        <div className='flex flex-wrap items-center justify-between gap-2 text-sm'>
-          <span className='text-muted-foreground'>
-            {t('{{count}} keys in total', { count: total })}
-          </span>
-          <div className='flex items-center gap-2'>
-            <Button
-              variant='outline'
-              size='sm'
-              disabled={page <= 1}
-              onClick={() => goPage(Math.max(1, page - 1))}
-            >
-              {t('Previous')}
-            </Button>
-            <span>
-              {t('Page {{page}} of {{pages}}', { page, pages: pageCount })}
-            </span>
-            <Button
-              variant='outline'
-              size='sm'
-              disabled={page >= pageCount}
-              onClick={() => goPage(page + 1)}
-            >
-              {t('Next')}
-            </Button>
-          </div>
-        </div>
+      <div className='flex h-full min-h-0 flex-col gap-2'>
         {list.isError && (
-          <p role='alert' className='text-destructive text-sm'>
+          <p role='alert' className='text-destructive shrink-0 text-sm'>
             {t('Refreshing the list failed: {{message}}', {
               message: toApiError(list.error).message,
             })}
           </p>
         )}
+        <div className='min-h-0 min-w-0 flex-1' data-testid='keys-body'>
+          <KeysTable
+            tokens={tokens}
+            total={total}
+            isLoading={false}
+            isFetching={list.isFetching}
+            money={money}
+            secrets={secrets}
+            busyId={busyId}
+            projectNames={projectNames}
+            pagination={pagination}
+            onPaginationChange={onPaginationChange}
+            ensurePageInRange={ensurePageInRange}
+            rowSelection={rowSelection}
+            onRowSelectionChange={setRowSelection}
+            onToggleStatus={onToggleStatus}
+            handlers={handlers}
+            onBulkDelete={onBulkDelete}
+          />
+        </div>
       </div>
     )
   }
 
   const confirmRotate = dialog?.kind === 'rotate' ? dialog.token : null
   const confirmDelete = dialog?.kind === 'delete' ? dialog.token : null
+  const confirmMany = dialog?.kind === 'delete-many' ? dialog.ids : null
 
   return (
     <>
-      {header}
-      {body}
+      <SectionPageLayout fixedContent>
+        <SectionPageLayout.Title>{t('API Keys')}</SectionPageLayout.Title>
+        <SectionPageLayout.Actions>
+          <ApiAddresses />
+          {createButton}
+        </SectionPageLayout.Actions>
+        <SectionPageLayout.Content>{body}</SectionPageLayout.Content>
+      </SectionPageLayout>
 
       {dialog?.kind === 'create' && (
-        <KeyFormDialog
+        <KeyFormSheet
           money={money}
           projects={projects.data ?? []}
           projectsFailed={projects.isError}
@@ -316,7 +314,7 @@ export function KeysPage() {
         />
       )}
       {dialog?.kind === 'edit' && (
-        <KeyFormDialog
+        <KeyFormSheet
           key={dialog.token.id}
           token={dialog.token}
           money={money}
@@ -375,18 +373,18 @@ export function KeysPage() {
         handleConfirm={() => confirmDelete && remove.mutate(confirmDelete)}
       />
       <ConfirmDialog
-        open={dialog?.kind === 'delete-many'}
+        open={confirmMany !== null}
         onOpenChange={(open) => {
           if (!open) setDialog(null)
         }}
         title={t('Delete the selected keys?')}
         desc={t('{{count}} keys will be deleted. This cannot be undone.', {
-          count: selected.size,
+          count: confirmMany?.length ?? 0,
         })}
         confirmText={t('Delete')}
         destructive
         isLoading={removeMany.isPending}
-        handleConfirm={() => removeMany.mutate([...selected])}
+        handleConfirm={() => confirmMany && removeMany.mutate(confirmMany)}
       />
     </>
   )

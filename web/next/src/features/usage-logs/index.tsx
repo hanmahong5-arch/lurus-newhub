@@ -1,77 +1,71 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { useQuery } from '@tanstack/react-query'
-import { Inbox } from 'lucide-react'
-import { useState } from 'react'
+import type { PaginationState, Updater } from '@tanstack/react-table'
+import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { EmptyState } from '@/components/empty-state'
-import { ErrorState } from '@/components/error-state'
-import { PageHeader } from '@/components/layout/page-header'
-import { LoadingState } from '@/components/loading-state'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Input } from '@/components/ui/input'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import { ROLE } from '@/lib/roles'
-import { currentLocale } from '@/lib/locale'
-import { formatQuota } from '@/lib/money'
-import { useMoneyConfig } from '@/lib/status'
-import { currentUserQueryOptions } from '@/lib/user'
+import { SectionPageLayout } from '@/components/section-page-layout'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useQuota } from '@/hooks/use-quota'
+import { useUserAccess } from '@/hooks/use-admin'
 
 import { fetchLogStat, fetchLogs } from './api'
+import { ExportButton } from './components/export-button'
 import { LogDetailSheet } from './components/log-detail-sheet'
 import { StatHeader } from './components/stat-header'
+import { UsageLogsTable } from './components/usage-logs-table'
 import {
   EMPTY_FILTERS,
   PAGE_SIZE,
-  formatLogTime,
-  isErrorLog,
-  isSettlementFailed,
-  latencyMs,
   normalizeList,
-  pageCount,
   type LogFilters,
   type UsageLog,
 } from './lib/logs'
 
-function Field(props: { label: string; children: React.ReactNode }) {
-  return (
-    <label className='flex min-w-40 flex-1 flex-col gap-1 text-xs'>
-      <span className='text-muted-foreground'>{props.label}</span>
-      {props.children}
-    </label>
-  )
-}
-
 export function UsageLogsPage() {
   const { t } = useTranslation()
-  const money = useMoneyConfig()
-  const { data: user } = useQuery(currentUserQueryOptions)
-  const isAdmin = (user?.role ?? 0) >= ROLE.ADMIN
+  const { config } = useQuota()
+  const access = useUserAccess()
+  // The tenant-wide scope 403s for anyone who is not a tenant admin.
+  const canSeeAll = access.isTenantAdmin
 
   // `draft` is what the inputs show; `applied` is what the queries ran with.
   const [draft, setDraft] = useState<LogFilters>(EMPTY_FILTERS)
   const [applied, setApplied] = useState<LogFilters>(EMPTY_FILTERS)
-  const [page, setPage] = useState(1)
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: PAGE_SIZE,
+  })
   const [selected, setSelected] = useState<UsageLog | null>(null)
 
-  // The tenant-wide toggle is meaningless (and 403s) for non-admins.
   const effective: LogFilters = {
     ...applied,
-    tenantWide: isAdmin && applied.tenantWide,
+    tenantWide: canSeeAll && applied.tenantWide,
   }
+  const page = pagination.pageIndex + 1
 
   const list = useQuery({
-    queryKey: ['usage-logs', 'list', effective, page],
-    queryFn: () => fetchLogs(effective, page),
+    queryKey: ['usage-logs', 'list', effective, page, pagination.pageSize],
+    queryFn: () => fetchLogs(effective, page, pagination.pageSize),
     retry: false,
+    placeholderData: (previous) => previous,
   })
   const stat = useQuery({
     queryKey: ['usage-logs', 'stat', effective],
@@ -79,219 +73,90 @@ export function UsageLogsPage() {
     retry: false,
   })
 
-  const set = <K extends keyof LogFilters>(key: K, value: LogFilters[K]) =>
-    setDraft((d) => ({ ...d, [key]: value }))
-
+  const patchDraft = useCallback(
+    (patch: Partial<LogFilters>) => setDraft((d) => ({ ...d, ...patch })),
+    []
+  )
   const apply = () => {
     setApplied(draft)
-    setPage(1)
+    setPagination((p) => ({ ...p, pageIndex: 0 }))
   }
   const reset = () => {
-    setDraft(EMPTY_FILTERS)
-    setApplied(EMPTY_FILTERS)
-    setPage(1)
+    const next = { ...EMPTY_FILTERS, tenantWide: effective.tenantWide }
+    setDraft(next)
+    setApplied(next)
+    setPagination((p) => ({ ...p, pageIndex: 0 }))
   }
+  const changeScope = (tenantWide: boolean) => {
+    // Another scope is another result set: back to page one, and a username
+    // filter only exists in the tenant-wide view.
+    setDraft((d) => ({ ...d, tenantWide, username: '' }))
+    setApplied((a) => ({ ...a, tenantWide, username: '' }))
+    setPagination((p) => ({ ...p, pageIndex: 0 }))
+  }
+  const changePagination = (updater: Updater<PaginationState>) =>
+    setPagination((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : updater
+      // A new page size invalidates the page index.
+      return next.pageSize === prev.pageSize
+        ? next
+        : { pageIndex: 0, pageSize: next.pageSize }
+    })
 
   const { logs, total } = normalizeList(list.data)
-  const pages = pageCount(total)
-
-  let body: React.ReactNode
-  if (list.isPending) {
-    body = <LoadingState />
-  } else if (list.isError) {
-    // A failed read is an error, never an empty list.
-    body = (
-      <ErrorState
-        title={t('Failed to load logs')}
-        description={list.error.message}
-        onRetry={() => void list.refetch()}
-      />
-    )
-  } else if (logs.length === 0) {
-    body = (
-      <EmptyState icon={Inbox} title={t('No logs in this window')} bordered />
-    )
-  } else {
-    body = (
-      <div className='rounded-lg border'>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>{t('Time')}</TableHead>
-              <TableHead>{t('Model')}</TableHead>
-              <TableHead>{t('Token')}</TableHead>
-              {effective.tenantWide && <TableHead>{t('User')}</TableHead>}
-              <TableHead className='text-right'>
-                {t('Tokens in / out')}
-              </TableHead>
-              <TableHead className='text-right'>{t('Cost')}</TableHead>
-              <TableHead className='text-right'>{t('Duration')}</TableHead>
-              <TableHead>{t('Status')}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {logs.map((row) => {
-              const latency = latencyMs(row)
-              return (
-                <TableRow
-                  key={row.id}
-                  data-testid='log-row'
-                  className='cursor-pointer'
-                  onClick={() => setSelected(row)}
-                >
-                  <TableCell className='whitespace-nowrap'>
-                    {formatLogTime(row.created_at)}
-                  </TableCell>
-                  <TableCell>{row.model_name || '--'}</TableCell>
-                  <TableCell>{row.token_name || '--'}</TableCell>
-                  {effective.tenantWide && (
-                    <TableCell>{row.username || '--'}</TableCell>
-                  )}
-                  <TableCell className='text-right tabular-nums'>
-                    {row.prompt_tokens} / {row.completion_tokens}
-                  </TableCell>
-                  <TableCell className='text-right tabular-nums'>
-                    <div>{formatQuota(row.quota, money, 4)}</div>
-                  </TableCell>
-                  <TableCell className='text-right tabular-nums'>
-                    {latency !== null ? `${latency}ms` : '--'}
-                  </TableCell>
-                  <TableCell>
-                    <div className='flex flex-wrap gap-1'>
-                      <Badge
-                        variant={isErrorLog(row) ? 'destructive' : 'secondary'}
-                      >
-                        {isErrorLog(row) ? t('Error') : t('OK')}
-                      </Badge>
-                      {isSettlementFailed(row) && (
-                        <Badge variant='warning'>
-                          {t('Settlement failed')}
-                        </Badge>
-                      )}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )
-            })}
-          </TableBody>
-        </Table>
-      </div>
-    )
-  }
 
   return (
     <>
-      <PageHeader title={t('Usage Logs')} />
-      <StatHeader
-        stat={stat.data}
-        loading={stat.isPending}
-        failed={stat.isError}
-        money={money}
-      />
-
-      <form
-        className='flex flex-wrap items-end gap-3'
-        onSubmit={(e) => {
-          e.preventDefault()
-          apply()
-        }}
-      >
-        <Field label={t('Start time')}>
-          <Input
-            type='datetime-local'
-            aria-label={t('Start time')}
-            value={draft.start}
-            onChange={(e) => set('start', e.target.value)}
-          />
-        </Field>
-        <Field label={t('End time')}>
-          <Input
-            type='datetime-local'
-            aria-label={t('End time')}
-            value={draft.end}
-            onChange={(e) => set('end', e.target.value)}
-          />
-        </Field>
-        <Field label={t('Model')}>
-          <Input
-            aria-label={t('Model')}
-            value={draft.model}
-            onChange={(e) => set('model', e.target.value)}
-          />
-        </Field>
-        <Field label={t('Token')}>
-          <Input
-            aria-label={t('Token')}
-            value={draft.token}
-            onChange={(e) => set('token', e.target.value)}
-          />
-        </Field>
-        <Field label={t('Request ID')}>
-          <Input
-            aria-label={t('Request ID')}
-            value={draft.requestId}
-            onChange={(e) => set('requestId', e.target.value)}
-          />
-        </Field>
-        <label className='flex items-center gap-2 pb-1.5 text-sm'>
-          <Checkbox
-            checked={draft.errorsOnly}
-            onCheckedChange={(v) => set('errorsOnly', v === true)}
-          />
-          {t('Errors only')}
-        </label>
-        {isAdmin && (
-          <label className='flex items-center gap-2 pb-1.5 text-sm'>
-            <Checkbox
-              checked={draft.tenantWide}
-              onCheckedChange={(v) => set('tenantWide', v === true)}
+      <SectionPageLayout>
+        <SectionPageLayout.Title>{t('Usage Logs')}</SectionPageLayout.Title>
+        <SectionPageLayout.Actions>
+          {canSeeAll && (
+            <Tabs
+              value={effective.tenantWide ? 'all' : 'mine'}
+              onValueChange={(v) => changeScope(v === 'all')}
+            >
+              <TabsList aria-label={t('View scope')}>
+                <TabsTrigger value='mine'>{t('Only mine')}</TabsTrigger>
+                <TabsTrigger value='all'>{t('All users')}</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          )}
+        </SectionPageLayout.Actions>
+        <SectionPageLayout.Content>
+          <div className='flex flex-col gap-3'>
+            <StatHeader
+              stat={stat.data}
+              loading={stat.isPending}
+              failed={stat.isError}
+              money={config}
             />
-            {t('All users')}
-          </label>
-        )}
-        <div className='flex gap-2'>
-          <Button type='submit'>{t('Search')}</Button>
-          <Button type='button' variant='outline' onClick={reset}>
-            {t('Reset')}
-          </Button>
-        </div>
-      </form>
-
-      {body}
-
-      {list.isSuccess && total > 0 && (
-        <div className='flex items-center justify-between text-sm'>
-          <span className='text-muted-foreground'>
-            {t('Total')} {total.toLocaleString(currentLocale())} · {PAGE_SIZE} {t('per page')}
-          </span>
-          <div className='flex items-center gap-2'>
-            <Button
-              variant='outline'
-              size='sm'
-              disabled={page <= 1}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-            >
-              {t('Previous')}
-            </Button>
-            <span className='tabular-nums'>
-              {page} / {pages}
-            </span>
-            <Button
-              variant='outline'
-              size='sm'
-              disabled={page >= pages}
-              onClick={() => setPage((p) => p + 1)}
-            >
-              {t('Next')}
-            </Button>
+            <UsageLogsTable
+              rows={logs}
+              total={total}
+              isLoading={list.isPending}
+              isFetching={list.isFetching}
+              error={list.isError ? list.error : null}
+              onRetry={() => void list.refetch()}
+              pagination={pagination}
+              onPaginationChange={changePagination}
+              isStaff={access.isPlatformStaff}
+              tenantWide={effective.tenantWide}
+              onOpen={setSelected}
+              draft={{ ...draft, tenantWide: effective.tenantWide }}
+              applied={effective}
+              onFilterChange={patchDraft}
+              onSearch={apply}
+              onReset={reset}
+              toolbarExtra={<ExportButton filters={effective} />}
+            />
           </div>
-        </div>
-      )}
+        </SectionPageLayout.Content>
+      </SectionPageLayout>
 
       <LogDetailSheet
         log={selected}
-        money={money}
         tenantWide={effective.tenantWide}
+        isStaff={access.isPlatformStaff}
         onClose={() => setSelected(null)}
       />
     </>

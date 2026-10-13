@@ -18,19 +18,29 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { createContext, useContext, useState } from 'react'
 
-import { getCookie, setCookie } from '@/lib/cookies'
+import { readThemePreference, writeThemePreference } from '@/lib/theme-storage'
 
 export type Collapsible = 'offcanvas' | 'icon' | 'none'
 export type Variant = 'inset' | 'sidebar' | 'floating'
 
-// Cookie constants following the pattern from sidebar.tsx
-const LAYOUT_COLLAPSIBLE_COOKIE_NAME = 'layout_collapsible'
-const LAYOUT_VARIANT_COOKIE_NAME = 'layout_variant'
-const LAYOUT_COOKIE_MAX_AGE = 60 * 60 * 24 * 7 // 7 days
+// localStorage keys (cookies are shared across ports, so a local instance
+// would otherwise restore another instance's layout).
+const LAYOUT_COLLAPSIBLE_KEY = 'newhub-console:layout:v1:collapsible'
+const LAYOUT_VARIANT_KEY = 'newhub-console:layout:v1:variant'
+const COLLAPSIBLE_VALUES: ReadonlySet<Collapsible> = new Set([
+  'offcanvas',
+  'icon',
+  'none',
+])
+const VARIANT_VALUES: ReadonlySet<Variant> = new Set([
+  'inset',
+  'sidebar',
+  'floating',
+])
 
 // Default values
-const DEFAULT_VARIANT = 'inset'
-const DEFAULT_COLLAPSIBLE = 'icon'
+const DEFAULT_VARIANT: Variant = 'inset'
+const DEFAULT_COLLAPSIBLE: Collapsible = 'icon'
 
 type LayoutContextType = {
   resetLayout: () => void
@@ -51,28 +61,32 @@ type LayoutProviderProps = {
 }
 
 export function LayoutProvider({ children }: LayoutProviderProps) {
-  const [collapsible, _setCollapsible] = useState<Collapsible>(() => {
-    const saved = getCookie(LAYOUT_COLLAPSIBLE_COOKIE_NAME)
-    return (saved as Collapsible) || DEFAULT_COLLAPSIBLE
-  })
+  const [collapsible, _setCollapsible] = useState<Collapsible>(() =>
+    readThemePreference(
+      LAYOUT_COLLAPSIBLE_KEY,
+      COLLAPSIBLE_VALUES,
+      DEFAULT_COLLAPSIBLE
+    )
+  )
 
-  const [variant, _setVariant] = useState<Variant>(() => {
-    const saved = getCookie(LAYOUT_VARIANT_COOKIE_NAME)
-    return (saved as Variant) || DEFAULT_VARIANT
-  })
+  const [variant, _setVariant] = useState<Variant>(() =>
+    readThemePreference(LAYOUT_VARIANT_KEY, VARIANT_VALUES, DEFAULT_VARIANT)
+  )
 
   const setCollapsible = (newCollapsible: Collapsible) => {
     _setCollapsible(newCollapsible)
-    setCookie(
-      LAYOUT_COLLAPSIBLE_COOKIE_NAME,
-      newCollapsible,
-      LAYOUT_COOKIE_MAX_AGE
+    writeThemePreference(
+      LAYOUT_COLLAPSIBLE_KEY,
+      newCollapsible === DEFAULT_COLLAPSIBLE ? null : newCollapsible
     )
   }
 
   const setVariant = (newVariant: Variant) => {
     _setVariant(newVariant)
-    setCookie(LAYOUT_VARIANT_COOKIE_NAME, newVariant, LAYOUT_COOKIE_MAX_AGE)
+    writeThemePreference(
+      LAYOUT_VARIANT_KEY,
+      newVariant === DEFAULT_VARIANT ? null : newVariant
+    )
   }
 
   const resetLayout = () => {

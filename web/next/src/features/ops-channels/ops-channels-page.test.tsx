@@ -5,9 +5,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/lib/api'
 
+import { channelRow, listBody } from './channels-test-utils'
 import { OpsChannelsPage } from './index'
 
-const { get, post, put, statusGet } = vi.hoisted(() => ({
+const { request, get, post, put, statusGet } = vi.hoisted(() => ({
+  request: vi.fn(),
   get: vi.fn(),
   post: vi.fn(),
   put: vi.fn(),
@@ -18,6 +20,7 @@ vi.mock('@/lib/api', async (orig) => {
   const actual = await orig<typeof import('@/lib/api')>()
   return {
     ...actual,
+    http: { request },
     tenantApi: { get, post, put, delete: vi.fn() },
     api: { get: statusGet, post: vi.fn(), put: vi.fn(), delete: vi.fn() },
   }
@@ -114,8 +117,23 @@ function baseHandlers(extra: Record<string, Handler> = {}) {
   }
 }
 
+// The v1 list is the page's source of rows; the tenant-scoped v2 handlers
+// above serve the ops sheet and the id-joined ops fields.
+let v1Items = [channelRow(1, { name: 'pool-1' })]
+let v1Failure: Error | null = null
+
 beforeEach(() => {
   vi.clearAllMocks()
+  window.localStorage.clear()
+  v1Items = [channelRow(1, { name: 'pool-1' })]
+  v1Failure = null
+  request.mockImplementation(async (cfg: { method: string; url: string }) => {
+    if (cfg.method === 'GET' && cfg.url === '/api/channel/') {
+      if (v1Failure) throw v1Failure
+      return { data: listBody(v1Items) }
+    }
+    return { data: { success: true, message: '', data: [] } }
+  })
   statusGet.mockResolvedValue(STATUS)
   get.mockImplementation((path: string, cfg?: { params?: unknown }) =>
     respond(path, cfg?.params)
@@ -127,12 +145,24 @@ beforeEach(() => {
 
 async function openDrawer() {
   renderPage()
-  const btn = await screen.findByRole('button', { name: 'Details of pool-1' })
-  await userEvent.click(btn)
+  await screen.findByText('pool-1')
+  await userEvent.click(screen.getByRole('button', { name: 'Open menu' }))
+  await userEvent.click(
+    await screen.findByRole('menuitem', { name: /Operations/ })
+  )
 }
 
-describe('channel modality column', () => {
+function showOpsColumns() {
+  window.localStorage.setItem(
+    'channels:column-visibility',
+    JSON.stringify({ plan: true, modality: true })
+  )
+}
+
+describe('ops fields on the channel table', () => {
   it('shows modalities and flags backend-reported mismatches', async () => {
+    showOpsColumns()
+    v1Items = [channelRow(1, { name: 'pool-1' }), channelRow(2), channelRow(3)]
     baseHandlers({
       '/channels': {
         channels: [
@@ -147,12 +177,14 @@ describe('channel modality column', () => {
         ],
         total: 3,
         page: 1,
-        page_size: 20,
+        page_size: 100,
       },
     })
     renderPage()
     const cell = await screen.findByTestId('channel-1-modality')
-    expect(within(cell).getByText('Chat model')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(within(cell).getByText('Chat model')).toBeInTheDocument()
+    )
     expect(within(cell).getByText('Rerank')).toBeInTheDocument()
     expect(screen.getByTestId('channel-1-mismatch')).toHaveTextContent(
       'Mismatch'
@@ -165,7 +197,8 @@ describe('channel modality column', () => {
 })
 
 describe('channel list', () => {
-  it('shows status, plan, key count, expiry and routability from the list payload alone', async () => {
+  it('shows plan, key count, expiry and routability from the ops payload', async () => {
+    showOpsColumns()
     baseHandlers({
       '/channels': {
         channels: [
@@ -180,53 +213,74 @@ describe('channel list', () => {
         ],
         total: 1,
         page: 1,
-        page_size: 20,
+        page_size: 100,
       },
     })
     renderPage()
     expect(await screen.findByText('pool-1')).toBeInTheDocument()
-    expect(screen.getByTestId('channel-1-plan')).toHaveTextContent('MiniMax plan')
-    expect(screen.getByTestId('channel-1-keys')).toHaveTextContent('2')
+    expect(await screen.findByTestId('channel-1-plan')).toHaveTextContent(
+      'MiniMax plan'
+    )
+    expect(screen.getByTestId('channel-1-keys')).toHaveTextContent('1/2 keys')
     expect(screen.getByTestId('channel-1-expires')).toHaveTextContent('(expired)')
     expect(await screen.findByText('Not routable')).toBeInTheDocument()
-    expect(get).toHaveBeenCalledWith('/channels', { params: { page: 1, page_size: 20 } })
   })
 
   it('makes no per-row detail or health request (no N+1)', async () => {
+    v1Items = [
+      channelRow(1, { name: 'pool-1' }),
+      channelRow(2, { name: 'pool-2' }),
+      channelRow(3, { name: 'pool-3' }),
+    ]
     baseHandlers({
       '/channels': {
         channels: [listItem(1), listItem(2), listItem(3)],
         total: 3,
         page: 1,
-        page_size: 20,
+        page_size: 100,
       },
     })
     renderPage()
     expect(await screen.findByText('pool-3')).toBeInTheDocument()
+    expect(await screen.findAllByText('Routable')).toHaveLength(3)
     const paths = get.mock.calls.map((c) => c[0] as string)
-    expect(paths.filter((p) => p !== '/channels' && p.startsWith('/channels/'))).toEqual([])
-    expect(screen.getAllByText('Routable')).toHaveLength(3)
+    expect(
+      paths.filter((p) => p !== '/channels' && p.startsWith('/channels/'))
+    ).toEqual([])
+    // one overview request covers every row
+    expect(paths.filter((p) => p === '/channels')).toHaveLength(1)
   })
 
   it('shows an error, not an empty state, when the list fails', async () => {
-    baseHandlers({ '/channels': new ApiError('boom', { status: 500 }) })
+    v1Failure = new ApiError('boom', { status: 500 })
     renderPage()
     expect(await screen.findByText('Could not load channels')).toBeInTheDocument()
     expect(screen.getByText('boom')).toBeInTheDocument()
-    expect(screen.queryByText('No channels yet')).not.toBeInTheDocument()
+    expect(screen.queryByText('No Channels Found')).not.toBeInTheDocument()
   })
 
   it('shows the empty state for a genuinely empty list', async () => {
-    baseHandlers({ '/channels': { channels: [], total: 0, page: 1, page_size: 20 } })
+    v1Items = []
     renderPage()
-    expect(await screen.findByText('No channels yet')).toBeInTheDocument()
+    expect(await screen.findByText('No Channels Found')).toBeInTheDocument()
   })
 
   it('hides the import button from non-staff users', async () => {
-    baseHandlers({ '/user/me': { id: 2, username: 'x', role: 1, quota: 0, used_quota: 0, remaining_quota: 0 } })
+    baseHandlers({
+      '/user/me': {
+        id: 2,
+        username: 'x',
+        role: 1,
+        quota: 0,
+        used_quota: 0,
+        remaining_quota: 0,
+      },
+    })
     renderPage()
     expect(await screen.findByText('pool-1')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Bulk import/ })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /Bulk import/ })
+    ).not.toBeInTheDocument()
   })
 })
 
@@ -530,6 +584,17 @@ describe('import wizard', () => {
   })
 
   it('appends to an existing multi-key channel without sending type fields', async () => {
+    v1Items = [
+      channelRow(1, {
+        name: 'pool-1',
+        channel_info: {
+          is_multi_key: true,
+          multi_key_size: 2,
+          multi_key_polling_index: 0,
+          multi_key_mode: 'random',
+        },
+      }),
+    ]
     baseHandlers({
       'POST /channels/import': { dry_run: true, summary: { ready: 1 }, results: [{ index: 0, status: 'ready' }] },
     })

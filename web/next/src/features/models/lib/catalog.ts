@@ -58,7 +58,11 @@ export interface PricingRow {
   model_name: string;
   vendor?: string;
   description?: string;
+  /** Icon key chosen by the operator for the model (brand icon name). */
+  icon?: string;
   tags?: string;
+  /** Groups whose members may call the model. */
+  enable_groups?: string[] | null;
   quota_type?: number;
   model_ratio?: number | null;
   model_price?: number | null;
@@ -113,6 +117,20 @@ export const MODALITIES = [
   'audio',
 ] as const;
 
+/** English source label for a billing kind. */
+export const priceTypeLabelKey = (p: PriceType): string => {
+  switch (p) {
+    case 'token':
+      return 'Token-based';
+    case 'request':
+      return 'Per request';
+    case 'search_unit':
+      return 'Per search unit';
+    default:
+      return 'Price not configured';
+  }
+};
+
 /** English source label for a modality; unknown values pass through. */
 export const modalityLabelKey = (m: string): string => {
   switch (m) {
@@ -137,7 +155,11 @@ export interface ModelEntry {
   id: string;
   vendor: string;
   description: string;
+  /** Brand icon key from the API; "" = none (an initial tile is drawn). */
+  icon: string;
   tags: string[];
+  /** Groups that may call the model; empty = the server did not say. */
+  groups: string[];
   capabilities: string[];
   /** "" = unknown. */
   modality: string;
@@ -202,7 +224,9 @@ export function buildCatalog({
         id: name,
         vendor: '',
         description: '',
+        icon: '',
         tags: [],
+        groups: [],
         capabilities: [],
         modality: '',
         usageUnit: 'token',
@@ -249,6 +273,10 @@ export function buildCatalog({
     e.priced = p.price_configured !== false;
     if (p.vendor) e.vendor = p.vendor;
     if (p.description) e.description = p.description;
+    if (p.icon) e.icon = p.icon;
+    if (Array.isArray(p.enable_groups)) {
+      e.groups = p.enable_groups.filter((g) => typeof g === 'string' && g);
+    }
     if (p.tags) {
       e.tags = String(p.tags)
         .split(',')
@@ -311,6 +339,18 @@ export function buildCatalog({
   return [...byName.values()];
 }
 
+/** Token prices are stored per million tokens; the page can show per 1K too. */
+export type TokenUnit = 'M' | 'K';
+
+/** Convert a USD-per-1M-tokens price to the displayed unit. null stays null. */
+export function perUnit(
+  usdPerM: number | null | undefined,
+  unit: TokenUnit,
+): number | null {
+  if (usdPerM == null || !Number.isFinite(usdPerM)) return null;
+  return unit === 'K' ? usdPerM / 1000 : usdPerM;
+}
+
 /** A usable price exists: a positive per-call price, or a positive input price. */
 export function hasPrice(e: ModelEntry): boolean {
   if (e.usageUnit === 'search_unit') return e.searchUnitPrice !== null;
@@ -344,10 +384,70 @@ export function capabilityFacets(entries: ModelEntry[]) {
   })).sort((a, b) => rank(a.capability) - rank(b.capability));
 }
 
+/** How a model is billed, as the sidebar and table label it. */
+export type PriceType = 'token' | 'request' | 'search_unit' | 'unpriced';
+
+export const PRICE_TYPES: readonly PriceType[] = [
+  'token',
+  'request',
+  'search_unit',
+  'unpriced',
+];
+
+/** Search-unit models are their own kind; a model without a usable price is unpriced. */
+export function priceTypeOf(e: ModelEntry): PriceType {
+  if (e.usageUnit === 'search_unit') return 'search_unit';
+  if (!hasPrice(e)) return 'unpriced';
+  return e.quotaType === 1 ? 'request' : 'token';
+}
+
+export function tagFacets(entries: ModelEntry[]) {
+  const counts = new Map<string, number>();
+  for (const e of entries) {
+    for (const tag of new Set(e.tags.map((x) => x.toLowerCase()))) {
+      counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+  }
+  return Array.from(counts, ([tag, count]) => ({ tag, count })).sort(
+    (a, b) => b.count - a.count || a.tag.localeCompare(b.tag),
+  );
+}
+
+export function modalityFacets(entries: ModelEntry[]) {
+  const counts = new Map<string, number>();
+  for (const e of entries) {
+    if (e.modality) counts.set(e.modality, (counts.get(e.modality) ?? 0) + 1);
+  }
+  const rank = (m: string) => {
+    const i = (MODALITIES as readonly string[]).indexOf(m);
+    return i < 0 ? 99 : i;
+  };
+  return Array.from(counts, ([modality, count]) => ({ modality, count })).sort(
+    (a, b) => rank(a.modality) - rank(b.modality),
+  );
+}
+
+export function priceTypeCounts(entries: ModelEntry[]) {
+  const counts: Record<PriceType, number> = {
+    token: 0,
+    request: 0,
+    search_unit: 0,
+    unpriced: 0,
+  };
+  for (const e of entries) counts[priceTypeOf(e)]++;
+  return counts;
+}
+
 export interface CatalogFilter {
   q?: string;
   vendors?: string[];
   capabilities?: string[];
+  tags?: string[];
+  modalities?: string[];
+  /** "" / undefined = all. */
+  priceType?: PriceType | '';
+  /** "" / undefined = all; otherwise the model must be enabled for it. */
+  group?: string;
   routableOnly?: boolean;
 }
 
@@ -358,9 +458,18 @@ export function filterCatalog(
   const q = (f.q ?? '').trim().toLowerCase();
   const vendors = f.vendors ?? [];
   const caps = f.capabilities ?? [];
+  const tags = (f.tags ?? []).map((x) => x.toLowerCase());
+  const modalities = f.modalities ?? [];
   return entries.filter((e) => {
     if (f.routableOnly && !e.routable) return false;
     if (vendors.length && !vendors.includes(e.vendor)) return false;
+    if (modalities.length && !modalities.includes(e.modality)) return false;
+    if (f.priceType && priceTypeOf(e) !== f.priceType) return false;
+    if (f.group && !e.groups.includes(f.group)) return false;
+    if (tags.length) {
+      const own = new Set(e.tags.map((x) => x.toLowerCase()));
+      if (!tags.every((x) => own.has(x))) return false;
+    }
     if (caps.length && !caps.every((c) => e.capabilities.includes(c))) {
       return false;
     }
@@ -377,8 +486,10 @@ export const SORTS = [
   'popular',
   'name',
   'input_asc',
+  'input_desc',
   'output_asc',
   'fastest',
+  'reliable',
 ] as const;
 export type SortKey = (typeof SORTS)[number];
 
@@ -410,8 +521,21 @@ export function sortCatalog(
       return out.sort(byName);
     case 'input_asc':
       return out.sort(byKey((e) => priceKey(e, 'inputPerM')));
+    case 'input_desc':
+      // Unpriced entries still sort last, never as the "most expensive".
+      return out.sort((a, b) => {
+        const pa = priceKey(a, 'inputPerM');
+        const pb = priceKey(b, 'inputPerM');
+        if (pa == null && pb == null) return byName(a, b);
+        if (pa == null) return 1;
+        if (pb == null) return -1;
+        return pb - pa || byName(a, b);
+      });
     case 'output_asc':
       return out.sort(byKey((e) => priceKey(e, 'outputPerM')));
+    case 'reliable':
+      // Lowest error rate first; unmeasured models (too little traffic) last.
+      return out.sort(byKey((e) => (e.enoughSamples ? e.errorRate : null)));
     case 'fastest':
       return out.sort(byKey((e) => (e.enoughSamples ? e.p50Ms : null)));
     default:
