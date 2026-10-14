@@ -2,15 +2,14 @@ import { queryOptions } from '@tanstack/react-query';
 
 import { tenantApi } from '@/lib/api';
 
-import {
-  buildCatalog,
-  type CatalogueRow,
-  type ModelEntry,
-  type PerformanceRow,
-  type PricingRow,
-  type RoutableRow,
-  type UsageRow,
+import type {
+  CatalogueRow,
+  PerformanceRow,
+  PricingRow,
+  RoutableRow,
+  UsageRow,
 } from './catalog';
+import type { PerfWindow } from './perf';
 
 interface PricingPayload {
   pricing?: PricingRow[];
@@ -68,11 +67,15 @@ async function fetchUsage(): Promise<UsageRow[] | null> {
   }
 }
 
-/** 24h p50/p95 and error rate for this tenant; decorative, fails quietly. */
-async function fetchPerformance(): Promise<PerformanceRow[]> {
+/**
+ * p50/p95 and error rate for this tenant over the last `hours` (the server
+ * accepts 1, 24 or 168); decorative, so a failed read yields no rows rather
+ * than an error.
+ */
+async function fetchPerformance(hours: PerfWindow): Promise<PerformanceRow[]> {
   try {
     const d = await tenantApi.get<{ items?: PerformanceRow[] }>(
-      '/models/performance?hours=24',
+      `/models/performance?hours=${hours}`,
       { skipAuthRedirect: true },
     );
     return Array.isArray(d?.items) ? d.items : [];
@@ -81,38 +84,52 @@ async function fetchPerformance(): Promise<PerformanceRow[]> {
   }
 }
 
-/** Load the sources and merge them. A failed required read rejects. */
-export async function loadModelCatalog(
-  group: string,
-  usdPerRatio: number,
+/** Everything the catalogue is built from except latency, un-merged. */
+export interface ModelSources {
+  routable: RoutableRow[];
+  pricing: PricingRow[];
+  /** Multiplier per group the caller may use. */
+  groupRatio: Record<string, number>;
+  catalogue: CatalogueRow[];
+  /** null = usage could not be read (no permission or failed), not zero. */
+  usage: UsageRow[] | null;
+}
+
+/**
+ * Load the sources. A failed required read rejects. The merge into entries is
+ * left to the caller (buildCatalog) so changing the selected group, the
+ * latency window or the display currency never refetches.
+ */
+export async function loadModelSources(
   canReadUsage = false,
-): Promise<ModelEntry[]> {
-  const [routable, pricing, catalogue, usage, performance] = await Promise.all([
+): Promise<ModelSources> {
+  const [routable, pricing, catalogue, usage] = await Promise.all([
     fetchRoutable(),
     fetchPricing(),
     fetchCatalogue(),
     canReadUsage ? fetchUsage() : Promise.resolve(null),
-    fetchPerformance(),
   ]);
-  return buildCatalog({
+  return {
     routable,
-    pricing: pricing.pricing,
+    pricing: pricing.pricing ?? [],
+    groupRatio: pricing.group_ratio ?? {},
     catalogue,
     usage,
-    performance,
-    groupRatio: pricing.group_ratio?.[group] ?? 1,
-    usdPerRatio,
-  });
+  };
 }
 
-export const modelCatalogQueryOptions = (
-  group: string,
-  usdPerRatio: number,
-  canReadUsage = false,
-) =>
+export const modelSourcesQueryOptions = (canReadUsage = false) =>
   queryOptions({
-    queryKey: ['models', 'catalog', group, usdPerRatio, canReadUsage],
-    queryFn: () => loadModelCatalog(group, usdPerRatio, canReadUsage),
+    queryKey: ['models', 'sources', canReadUsage],
+    queryFn: () => loadModelSources(canReadUsage),
+    staleTime: 30_000,
+    retry: false,
+  });
+
+export const modelPerformanceQueryOptions = (hours: PerfWindow) =>
+  queryOptions({
+    queryKey: ['models', 'performance', hours],
+    queryFn: () => fetchPerformance(hours),
     staleTime: 30_000,
     retry: false,
   });

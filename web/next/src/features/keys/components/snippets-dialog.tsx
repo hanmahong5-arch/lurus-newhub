@@ -36,8 +36,8 @@ import { routableModelsQueryOptions } from '../api'
 import {
   KEY_PLACEHOLDER,
   MODEL_PLACEHOLDER,
-  WIRE_ANTHROPIC,
-  WIRE_OPENAI,
+  WIRE_MESSAGES,
+  WIRE_CHAT,
   buildSnippets,
   clientEndpoints,
   firstModelFor,
@@ -58,7 +58,7 @@ const TABS: Array<[SnippetTab, string]> = [
   ['curl', 'cURL'],
   ['python', 'Python'],
   ['node', 'Node.js'],
-  ['anthropic', 'Messages API'],
+  ['messages', 'Messages API'],
 ]
 
 export function SnippetsDialog(props: SnippetsDialogProps) {
@@ -78,12 +78,12 @@ export function SnippetsDialog(props: SnippetsDialogProps) {
     return buildSnippets(
       secret ?? KEY_PLACEHOLDER,
       host,
-      firstModelFor(usable, WIRE_OPENAI) ?? MODEL_PLACEHOLDER,
-      firstModelFor(usable, WIRE_ANTHROPIC)
+      firstModelFor(usable, WIRE_CHAT) ?? MODEL_PLACEHOLDER,
+      firstModelFor(usable, WIRE_MESSAGES)
     )
   }, [models.data, token, secret, host])
 
-  const tabs = TABS.filter(([k]) => k !== 'anthropic' || snippets.anthropic)
+  const tabs = TABS.filter(([k]) => k !== 'messages' || snippets.messages)
   const active = tabs.some(([k]) => k === tab) ? tab : 'curl'
   const text = snippets[active]
 
@@ -104,7 +104,7 @@ export function SnippetsDialog(props: SnippetsDialogProps) {
           {clientEndpoints(host).map(([label, url]) => (
             <div key={label} className='flex items-center gap-2'>
               <span className='text-muted-foreground w-40 shrink-0'>
-                {label}
+                {t(label)}
               </span>
               <code className='min-w-0 flex-1 truncate font-mono'>{url}</code>
               <CopyButton value={url} aria-label={t('Copy base URL')} />
@@ -137,7 +137,7 @@ export function SnippetsDialog(props: SnippetsDialogProps) {
               variant={k === active ? 'secondary' : 'ghost'}
               onClick={() => setTab(k)}
             >
-              {label}
+              {t(label)}
             </Button>
           ))}
         </div>

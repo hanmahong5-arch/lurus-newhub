@@ -55,10 +55,12 @@ func getPath(engine *gin.Engine, path string) *httptest.ResponseRecorder {
 	return w
 }
 
-func TestWebRouter_NextConsoleRoutesGetTheNextDocument(t *testing.T) {
+func TestWebRouter_SiteRootPagesGetTheNextDocument(t *testing.T) {
 	engine := newConsoleEngine(t, nextDist())
 
-	for _, path := range []string{"/next", "/next/", "/next/index.html", "/next/keys", "/next/usage-logs?p=2", "/next/models/deep/link"} {
+	// "/nextfoo" and "/consolex" share a substring with a mount but are not
+	// under it, so they are new-console pages like any other.
+	for _, path := range []string{"/", "/dashboard", "/keys", "/usage-logs?p=2", "/pricing", "/pricing/model-a", "/models/deep/link", "/nextfoo", "/consolex", "/loginx"} {
 		w := getPath(engine, path)
 		if w.Code != http.StatusOK {
 			t.Fatalf("GET %s = %d, want 200", path, w.Code)
@@ -72,11 +74,12 @@ func TestWebRouter_NextConsoleRoutesGetTheNextDocument(t *testing.T) {
 	}
 }
 
-func TestWebRouter_LegacyConsoleKeepsTheLegacyDocument(t *testing.T) {
+func TestWebRouter_LegacyConsoleKeepsSignInAndConsolePaths(t *testing.T) {
 	engine := newConsoleEngine(t, nextDist())
 
-	// "/nextfoo" and "/console/next" share the substring but not the mount.
-	for _, path := range []string{"/", "/console", "/console/v2/dashboard", "/login", "/nextfoo", "/console/next/keys"} {
+	// The sign-in flow is named by Go handlers and the IdP redirect URIs, and
+	// /console/* holds the operator pages the new console links back to.
+	for _, path := range []string{"/console", "/console/v2/dashboard", "/console/next/keys", "/console/openrouter-sync", "/login", "/login/acme", "/register", "/bridge-login", "/oauth/oidc", "/setup", "/account-disabled", "/forbidden", "/chat2link"} {
 		w := getPath(engine, path)
 		if w.Code != http.StatusOK {
 			t.Fatalf("GET %s = %d, want 200", path, w.Code)
@@ -87,13 +90,36 @@ func TestWebRouter_LegacyConsoleKeepsTheLegacyDocument(t *testing.T) {
 	}
 }
 
-func TestWebRouter_NextFallsBackToLegacyWithoutANextBuild(t *testing.T) {
-	// CI stubs dist to a single index.html; /next/* must not 404 or panic.
+func TestWebRouter_OldNextBookmarksRedirectToTheSiteRoot(t *testing.T) {
+	engine := newConsoleEngine(t, nextDist())
+
+	for path, want := range map[string]string{
+		"/next":                "/",
+		"/next/":               "/",
+		"/next/keys":           "/keys",
+		"/next/usage-logs?p=2": "/usage-logs?p=2",
+		"/next/org/members":    "/org/members",
+	} {
+		w := getPath(engine, path)
+		if w.Code != http.StatusFound {
+			t.Fatalf("GET %s = %d, want 302", path, w.Code)
+		}
+		if got := w.Header().Get("Location"); got != want {
+			t.Fatalf("GET %s Location = %q, want %q", path, got, want)
+		}
+		if got := w.Header().Get("Cache-Control"); got != "no-cache" {
+			t.Fatalf("GET %s Cache-Control = %q, want no-cache: a cached redirect would outlive a rollback", path, got)
+		}
+	}
+}
+
+func TestWebRouter_EverythingIsLegacyWithoutANextBuild(t *testing.T) {
+	// CI stubs dist to a single index.html; no page may 404 or panic.
 	engine := newConsoleEngine(t, fstest.MapFS{
 		"index.html": {Data: []byte(legacyIndexHTML)},
 	})
 
-	for _, path := range []string{"/next", "/next/", "/next/keys"} {
+	for _, path := range []string{"/", "/dashboard", "/next", "/next/", "/next/keys", "/login"} {
 		w := getPath(engine, path)
 		if w.Code != http.StatusOK {
 			t.Fatalf("GET %s = %d, want 200", path, w.Code)
@@ -167,11 +193,11 @@ func TestWebRouter_NextDocumentIsBehindTheSameRateLimitAsTheLegacyOne(t *testing
 	}
 	// ...the document does.
 	for i := 1; i <= 2; i++ {
-		if w := getFrom(engine, clientIP, "/next/keys"); w.Code != http.StatusOK {
+		if w := getFrom(engine, clientIP, "/keys"); w.Code != http.StatusOK {
 			t.Fatalf("document request %d = %d, want 200", i, w.Code)
 		}
 	}
-	if w := getFrom(engine, clientIP, "/next/keys"); w.Code != http.StatusTooManyRequests {
-		t.Fatalf("third document request = %d, want 429: /next must not be a way around the SPA document budget", w.Code)
+	if w := getFrom(engine, clientIP, "/keys"); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("third document request = %d, want 429: the new console must not be a way around the SPA document budget", w.Code)
 	}
 }

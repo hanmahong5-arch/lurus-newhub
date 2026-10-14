@@ -47,3 +47,64 @@ export interface TrendData {
   start: number
   end: number
 }
+
+export type ConsumptionDistributionChartType = 'bar' | 'area'
+
+export type ModelAnalyticsChartTab = 'trend' | 'proportion' | 'top'
+
+/** Persisted per browser (localStorage), not per account. */
+export interface DashboardChartPreferences {
+  consumptionDistributionChart: ConsumptionDistributionChartType
+  modelAnalyticsChart: ModelAnalyticsChartTab
+  defaultTimeRangeDays: number
+  defaultTimeGranularity: 'hour' | 'day' | 'week'
+}
+
+/**
+ * What the models tab asks for. A preset (`days`) is a rolling window that is
+ * re-anchored to "now" on every fetch, so a refresh never shows a stale span;
+ * a custom range carries its own fixed `start`/`end`.
+ */
+export interface DashboardFilters {
+  /** Rolling window in days; null when a custom start/end is set. */
+  days: number | null
+  start?: Date
+  end?: Date
+  granularity: 'hour' | 'day' | 'week'
+}
+
+/** One row of GET /api/v2/~/models/performance (member + admin views). */
+export interface PerformanceRow {
+  model_name: string
+  p50_latency_ms: number
+  p95_latency_ms: number
+  error_rate: number
+  enough_samples: boolean
+  /** Volume fields are present for tenant admins only. */
+  requests?: number
+  errors?: number
+  total_tokens?: number
+  quota?: number
+  latency_samples?: number
+}
+
+export interface PerformanceData {
+  hours: number
+  minSamples: number | null
+  items: PerformanceRow[]
+}
+
+/** console_setting announcement entry (api /api/status `announcements`). */
+export interface AnnouncementItem {
+  id?: number
+  content: string
+  publishDate?: string
+  type?: 'default' | 'ongoing' | 'success' | 'warning' | 'error'
+  extra?: string
+}
+
+export interface FAQItem {
+  id?: number
+  question: string
+  answer: string
+}

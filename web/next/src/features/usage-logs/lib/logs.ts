@@ -1,3 +1,21 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { currentLocale } from '@/lib/locale'
 
 /**
@@ -10,6 +28,9 @@ import { currentLocale } from '@/lib/locale'
 export const LOG_TYPE_ERROR = 5
 
 export const PAGE_SIZE = 20
+
+/** Page sizes the table's size picker offers (server clamps to 1..100). */
+export const PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const
 
 /** Default lookback of every list/stat query that has no explicit start. */
 export const DEFAULT_LOOKBACK_SEC = 7 * 24 * 3600
@@ -36,7 +57,9 @@ export interface UsageLog {
   token_id: number
   group: string
   total_latency_ms: number
-  /** Wallet debit in 0.0001 CNY; only present when the server ships it. */
+  /** Wallet debit in 0.0001 CNY (logs.charged_cny4); 0 = nothing recorded. */
+  charged_cny4?: number
+  /** Tier-filtered auxiliary payload; platform staff also get admin_info. */
   other?: unknown
 }
 
@@ -65,8 +88,12 @@ export interface LogFilters {
   end: string
   model: string
   token: string
-  errorsOnly: boolean
+  /** Log type to list; 0 = every type. */
+  logType: number
   requestId: string
+  sessionId: string
+  /** Tenant-wide view only: exact member username. */
+  username: string
   /** Admin-only: read every member's rows (/logs/all). */
   tenantWide: boolean
 }
@@ -76,8 +103,10 @@ export const EMPTY_FILTERS: LogFilters = {
   end: '',
   model: '',
   token: '',
-  errorsOnly: false,
+  logType: 0,
   requestId: '',
+  sessionId: '',
+  username: '',
   tenantWide: false,
 }
 
@@ -113,10 +142,20 @@ export function buildFilterParams(
   const token = f.token.trim()
   if (model) p.set('model_name', model)
   if (token) p.set('token_name', token)
-  if (f.errorsOnly) p.set('type', String(LOG_TYPE_ERROR))
+  if (f.logType > 0) p.set('type', String(f.logType))
+  // `username` is bound by /logs/all only; the member route ignores it.
+  const username = f.username.trim()
+  if (f.tenantWide && username) p.set('username', username)
   p.set(
     'start_time',
-    String(computeStartTimeSec(f.start, f.end, !!f.requestId.trim(), nowSec))
+    String(
+      computeStartTimeSec(
+        f.start,
+        f.end,
+        !!f.requestId.trim() || !!f.sessionId.trim(),
+        nowSec
+      )
+    )
   )
   const end = toSec(f.end)
   if (end !== null) p.set('end_time', String(end))
@@ -127,13 +166,16 @@ export function buildFilterParams(
 export function buildListParams(
   f: LogFilters,
   page: number,
+  pageSize: number = PAGE_SIZE,
   nowSec?: number
 ): URLSearchParams {
   const p = buildFilterParams(f, nowSec)
   const rid = f.requestId.trim()
   if (rid) p.set('request_id', rid)
+  const sid = f.sessionId.trim()
+  if (sid) p.set('session_id', sid)
   p.set('page', String(page))
-  p.set('page_size', String(PAGE_SIZE))
+  p.set('page_size', String(pageSize))
   return p
 }
 
@@ -222,8 +264,8 @@ export function normalizeList(data: LogListData | undefined | null): {
   return { logs: data?.logs ?? [], total: data?.total ?? 0 }
 }
 
-export function pageCount(total: number): number {
-  return Math.max(1, Math.ceil(total / PAGE_SIZE))
+export function pageCount(total: number, size: number = PAGE_SIZE): number {
+  return Math.max(1, Math.ceil(total / size))
 }
 
 /** Local date-time of a unix-seconds timestamp. */

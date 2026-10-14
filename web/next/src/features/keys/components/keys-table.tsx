@@ -16,226 +16,346 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Code2, Pencil, RefreshCw, Trash2 } from 'lucide-react'
+import type {
+  ColumnFiltersState,
+  OnChangeFn,
+  PaginationState,
+  RowSelectionState,
+  Table as TanstackTable,
+} from '@tanstack/react-table'
+import { Database, Trash2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { CopyButton } from '@/components/copy-button'
-import { StatusBadge, type StatusVariant } from '@/components/status-badge'
+import {
+  DISABLED_ROW_DESKTOP,
+  DISABLED_ROW_MOBILE,
+  DataTableBulkActions,
+  DataTablePage,
+  useDataTable,
+} from '@/components/data-table'
+import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Switch } from '@/components/ui/switch'
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from '@/components/ui/empty'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import type { MoneyConfig } from '@/lib/money'
-import { formatDate } from '@/lib/time'
+import { cn } from '@/lib/utils'
 
-import {
-  isStoredEnabled,
-  tokenState,
-  type TokenState,
-} from '../lib/map'
-import { quotaView } from '../lib/quota'
+import { tokenState } from '../lib/map'
+import { STATE_VARIANT, TOKEN_STATES, useStateLabels } from '../lib/state'
 import type { ApiToken } from '../types'
+import {
+  ActivityCell,
+  ExpiryCell,
+  IpRestrictionsCell,
+  KeyCell,
+  ModelLimitsCell,
+  QuotaCell,
+  StatusToggle,
+} from './key-cells'
+import { useKeyColumns } from './key-columns'
+import { KeyRowActions, type KeyRowHandlers } from './key-row-actions'
 
-const STATE_VARIANT: Record<TokenState, StatusVariant> = {
-  enabled: 'success',
-  'near-cap': 'warning',
-  disabled: 'neutral',
-  expired: 'danger',
-  exhausted: 'danger',
+const COLUMN_VISIBILITY_KEY = 'keys:column-visibility'
+const INITIAL_VISIBILITY = { allow_ips: false }
+const MOBILE_SKELETONS = ['a', 'b', 'c', 'd', 'e']
+
+export interface KeysTableProps {
+  tokens: ApiToken[]
+  /** Server-side total, for the page count. */
+  total: number
+  isLoading: boolean
+  isFetching: boolean
+  money: MoneyConfig | null
+  secrets: Record<number, string>
+  busyId: number | null
+  projectNames: Map<number, string>
+  pagination: PaginationState
+  onPaginationChange: OnChangeFn<PaginationState>
+  ensurePageInRange: (pageCount: number) => void
+  rowSelection: RowSelectionState
+  onRowSelectionChange: OnChangeFn<RowSelectionState>
+  onToggleStatus: (token: ApiToken, enable: boolean) => void
+  handlers: KeyRowHandlers
+  /** Ids of the selected rows that are currently visible. */
+  onBulkDelete: (ids: number[]) => void
 }
 
-interface KeysTableProps {
-  tokens: ApiToken[]
+function isInactive(token: ApiToken, nowSec: number): boolean {
+  const state = tokenState(token, nowSec)
+  return state !== 'enabled' && state !== 'near-cap'
+}
+
+function KeysMobileList(props: {
+  table: TanstackTable<ApiToken>
+  isLoading: boolean
+  nowMs: number
   money: MoneyConfig | null
-  nowSec: number
-  /** Plaintext keys known in this session (create / rotate), by token id. */
   secrets: Record<number, string>
-  selected: Set<number>
   busyId: number | null
-  onToggleSelect: (id: number, on: boolean) => void
-  onToggleAll: (on: boolean) => void
   onToggleStatus: (token: ApiToken, enable: boolean) => void
-  onEdit: (token: ApiToken) => void
-  onSnippets: (token: ApiToken) => void
-  onRotate: (token: ApiToken) => void
-  onDelete: (token: ApiToken) => void
+  handlers: KeyRowHandlers
+}) {
+  const { t } = useTranslation()
+  const labels = useStateLabels()
+  const rows = props.table.getRowModel().rows
+  const nowSec = Math.floor(props.nowMs / 1000)
+
+  if (props.isLoading) {
+    return (
+      <div className='min-w-0 space-y-3'>
+        {MOBILE_SKELETONS.map((id) => (
+          <div
+            key={id}
+            className='border-border/60 bg-card space-y-2 rounded-xl border p-3.5'
+          >
+            <div className='flex items-center justify-between'>
+              <Skeleton className='h-4 w-32' />
+              <Skeleton className='h-5 w-16 rounded-md' />
+            </div>
+            <Skeleton className='h-7 w-44' />
+            <Skeleton className='h-3 w-28' />
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  if (rows.length === 0) {
+    return (
+      <div className='rounded-lg border p-8'>
+        <Empty className='border-none p-0'>
+          <EmptyHeader>
+            <EmptyMedia variant='icon'>
+              <Database className='size-6' />
+            </EmptyMedia>
+            <EmptyTitle>{t('No keys match')}</EmptyTitle>
+            <EmptyDescription>
+              {t('Try a different search or clear the status filter.')}
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      </div>
+    )
+  }
+
+  return (
+    <div className='min-w-0 space-y-3' data-testid='keys-mobile-list'>
+      {rows.map((row) => {
+        const token = row.original
+        const state = tokenState(token, nowSec)
+        return (
+          <div
+            key={row.id}
+            data-testid={`key-card-${token.id}`}
+            className={cn(
+              'border-border/60 bg-card min-w-0 space-y-2 rounded-xl border p-3.5 text-xs leading-4',
+              isInactive(token, nowSec) && DISABLED_ROW_MOBILE
+            )}
+          >
+            <div className='flex items-start justify-between gap-3'>
+              <div className='flex min-w-0 items-start gap-2'>
+                <Checkbox
+                  checked={row.getIsSelected()}
+                  onCheckedChange={(v) => row.toggleSelected(!!v)}
+                  aria-label={t('Select {{name}}', { name: token.name })}
+                  className='mt-0.5'
+                />
+                <div className='min-w-0 text-sm leading-5 font-semibold break-words'>
+                  {token.name}
+                </div>
+              </div>
+              <StatusBadge
+                label={labels[state]}
+                variant={STATE_VARIANT[state]}
+                copyable={false}
+                className='shrink-0'
+              />
+            </div>
+
+            <div className='flex min-w-0 items-center justify-between gap-2'>
+              <div className='min-w-0 flex-1'>
+                <KeyCell token={token} secret={props.secrets[token.id]} />
+              </div>
+              <div className='flex shrink-0 items-center gap-1'>
+                <StatusToggle
+                  token={token}
+                  busy={props.busyId === token.id}
+                  onToggle={props.onToggleStatus}
+                />
+                <KeyRowActions token={token} handlers={props.handlers} />
+              </div>
+            </div>
+
+            <div className='min-w-0 py-1'>
+              <QuotaCell token={token} money={props.money} variant='card' />
+            </div>
+
+            <div className='flex flex-wrap items-center gap-x-5 gap-y-1'>
+              <ModelLimitsCell token={token} inline />
+              <IpRestrictionsCell token={token} inline />
+            </div>
+
+            <div className='grid grid-cols-3 items-start gap-3 border-t pt-2'>
+              <div className='col-span-2 min-w-0'>
+                <ActivityCell token={token} nowMs={props.nowMs} layout='columns' />
+              </div>
+              <div className='min-w-0 space-y-1'>
+                <div className='text-muted-foreground'>{t('Expires')}</div>
+                <ExpiryCell token={token} nowMs={props.nowMs} />
+              </div>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function BulkBar(props: {
+  table: TanstackTable<ApiToken>
+  onBulkDelete: (ids: number[]) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <DataTableBulkActions table={props.table} entityName={t('API key')}>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant='destructive'
+              size='icon'
+              className='size-8'
+              aria-label={t('Delete selected keys')}
+              onClick={() =>
+                props.onBulkDelete(
+                  props.table
+                    .getFilteredSelectedRowModel()
+                    .rows.map((r) => r.original.id)
+                )
+              }
+            />
+          }
+        >
+          <Trash2 />
+        </TooltipTrigger>
+        <TooltipContent>
+          <p>{t('Delete selected keys')}</p>
+        </TooltipContent>
+      </Tooltip>
+    </DataTableBulkActions>
+  )
 }
 
 export function KeysTable(props: KeysTableProps) {
   const { t } = useTranslation()
-  const { tokens, selected } = props
-  const allSelected = tokens.length > 0 && tokens.every((k) => selected.has(k.id))
+  const labels = useStateLabels()
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
 
-  const stateLabel: Record<TokenState, string> = {
-    enabled: t('Enabled'),
-    'near-cap': t('Near quota limit'),
-    disabled: t('Disabled'),
-    expired: t('Expired'),
-    exhausted: t('Quota exhausted'),
-  }
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 30_000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  const columns = useKeyColumns({
+    money: props.money,
+    nowMs,
+    secrets: props.secrets,
+    busyId: props.busyId,
+    projectNames: props.projectNames,
+    onToggleStatus: props.onToggleStatus,
+    handlers: props.handlers,
+  })
+
+  const { table } = useDataTable({
+    data: props.tokens,
+    columns,
+    getRowId: (token) => String(token.id),
+    enableRowSelection: true,
+    rowSelection: props.rowSelection,
+    onRowSelectionChange: props.onRowSelectionChange,
+    columnFilters,
+    onColumnFiltersChange: setColumnFilters,
+    globalFilter: '',
+    columnVisibilityStorageKey: COLUMN_VISIBILITY_KEY,
+    initialColumnVisibility: INITIAL_VISIBILITY,
+    // The server pages the list; search and status narrow the loaded page.
+    manualPagination: true,
+    pagination: props.pagination,
+    onPaginationChange: props.onPaginationChange,
+    totalCount: props.total,
+    ensurePageInRange: props.ensurePageInRange,
+  })
+
+  const nowSec = Math.floor(nowMs / 1000)
+  const filtered = columnFilters.length > 0
 
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead className='w-8'>
-            <Checkbox
-              checked={allSelected}
-              onCheckedChange={(v) => props.onToggleAll(v === true)}
-              aria-label={t('Select all on this page')}
-            />
-          </TableHead>
-          <TableHead>{t('Name')}</TableHead>
-          <TableHead>{t('Key')}</TableHead>
-          <TableHead>{t('Status')}</TableHead>
-          <TableHead>{t('Quota')}</TableHead>
-          <TableHead>{t('Expires')}</TableHead>
-          <TableHead>{t('Last used')}</TableHead>
-          <TableHead className='text-end'>{t('Actions')}</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {tokens.map((token) => {
-          const state = tokenState(token, props.nowSec)
-          const q = quotaView(token, props.money)
-          const secret = props.secrets[token.id]
-          const busy = props.busyId === token.id
-          return (
-            <TableRow key={token.id} data-testid={`key-row-${token.id}`}>
-              <TableCell>
-                <Checkbox
-                  checked={selected.has(token.id)}
-                  onCheckedChange={(v) =>
-                    props.onToggleSelect(token.id, v === true)
-                  }
-                  aria-label={t('Select {{name}}', { name: token.name })}
-                />
-              </TableCell>
-              <TableCell className='max-w-48 truncate font-medium'>
-                {token.name}
-              </TableCell>
-              <TableCell>
-                <div className='flex items-center gap-1'>
-                  <code className='font-mono text-xs'>
-                    {secret ?? token.key}
-                  </code>
-                  {secret != null && (
-                    <CopyButton
-                      value={secret}
-                      size='icon'
-                      aria-label={t('Copy key')}
-                    />
-                  )}
-                </div>
-              </TableCell>
-              <TableCell>
-                <StatusBadge
-                  label={stateLabel[state]}
-                  variant={STATE_VARIANT[state]}
-                  copyable={false}
-                />
-              </TableCell>
-              <TableCell>
-                {q.unlimited ? (
-                  <div className='text-sm'>
-                    <span>{t('Unlimited')}</span>
-                    <span className='text-muted-foreground ms-2 text-xs'>
-                      {t('used {{amount}}', { amount: q.used })}
-                    </span>
-                  </div>
-                ) : (
-                  <div className='grid min-w-32 gap-1'>
-                    <span className='text-sm'>
-                      {q.used} / {q.total}
-                    </span>
-                    {q.usedRatio != null && (
-                      <div
-                        className='bg-muted h-1 w-full overflow-hidden rounded-full'
-                        role='progressbar'
-                        aria-valuemin={0}
-                        aria-valuemax={100}
-                        aria-valuenow={Math.round(q.usedRatio * 100)}
-                      >
-                        <div
-                          className={
-                            q.usedRatio >= 0.9 ? 'bg-destructive h-1' : 'bg-primary h-1'
-                          }
-                          style={{ width: `${q.usedRatio * 100}%` }}
-                        />
-                      </div>
-                    )}
-                  </div>
-                )}
-              </TableCell>
-              <TableCell className='text-sm'>
-                {token.expired_time > 0
-                  ? formatDate(token.expired_time)
-                  : t('Never')}
-              </TableCell>
-              <TableCell className='text-sm'>
-                {token.accessed_time > 0 ? formatDate(token.accessed_time) : '-'}
-              </TableCell>
-              <TableCell>
-                <div className='flex items-center justify-end gap-1'>
-                  <Switch
-                    size='sm'
-                    checked={isStoredEnabled(token)}
-                    disabled={busy}
-                    onCheckedChange={(v) => props.onToggleStatus(token, v)}
-                    aria-label={
-                      isStoredEnabled(token)
-                        ? t('Disable {{name}}', { name: token.name })
-                        : t('Enable {{name}}', { name: token.name })
-                    }
-                  />
-                  <Button
-                    variant='ghost'
-                    size='icon-sm'
-                    onClick={() => props.onSnippets(token)}
-                    aria-label={t('Usage examples for {{name}}', {
-                      name: token.name,
-                    })}
-                  >
-                    <Code2 />
-                  </Button>
-                  <Button
-                    variant='ghost'
-                    size='icon-sm'
-                    onClick={() => props.onEdit(token)}
-                    aria-label={t('Edit {{name}}', { name: token.name })}
-                  >
-                    <Pencil />
-                  </Button>
-                  <Button
-                    variant='ghost'
-                    size='icon-sm'
-                    onClick={() => props.onRotate(token)}
-                    aria-label={t('Rotate {{name}}', { name: token.name })}
-                  >
-                    <RefreshCw />
-                  </Button>
-                  <Button
-                    variant='ghost'
-                    size='icon-sm'
-                    onClick={() => props.onDelete(token)}
-                    aria-label={t('Delete {{name}}', { name: token.name })}
-                  >
-                    <Trash2 />
-                  </Button>
-                </div>
-              </TableCell>
-            </TableRow>
-          )
-        })}
-      </TableBody>
-    </Table>
+    <DataTablePage
+      table={table}
+      columns={columns}
+      isLoading={props.isLoading}
+      isFetching={props.isFetching}
+      emptyTitle={t('No keys match')}
+      emptyDescription={t(
+        'Try a different search or clear the status filter.'
+      )}
+      skeletonKeyPrefix='keys-skeleton'
+      applyHeaderSize
+      pinnedColumns={[{ columnId: 'actions', side: 'right' }]}
+      toolbarProps={{
+        searchKey: 'name',
+        searchPlaceholder: t('Filter by name...'),
+        filters: [
+          {
+            columnId: 'status',
+            title: t('Status'),
+            singleSelect: true,
+            options: TOKEN_STATES.map((state) => ({
+              value: state,
+              label: labels[state],
+            })),
+          },
+        ],
+      }}
+      mobile={
+        <KeysMobileList
+          table={table}
+          isLoading={props.isLoading}
+          nowMs={nowMs}
+          money={props.money}
+          secrets={props.secrets}
+          busyId={props.busyId}
+          onToggleStatus={props.onToggleStatus}
+          handlers={props.handlers}
+        />
+      }
+      getRowClassName={(row) =>
+        isInactive(row.original, nowSec) ? DISABLED_ROW_DESKTOP : undefined
+      }
+      afterTable={
+        filtered ? (
+          <p className='text-muted-foreground text-xs'>
+            {t('Search and status filters apply to the keys on this page.')}
+          </p>
+        ) : null
+      }
+      bulkActions={
+        <BulkBar table={table} onBulkDelete={props.onBulkDelete} />
+      }
+    />
   )
 }
-

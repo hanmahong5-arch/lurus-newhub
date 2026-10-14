@@ -186,3 +186,222 @@ export interface ImportRequest {
   models?: string
   proxy?: string
 }
+
+// ============================================================================
+// v1 channel management (GET/POST/PUT /api/channel...). The row is the raw
+// channel record with the key column omitted by the server.
+// ============================================================================
+
+export interface ChannelInfo {
+  is_multi_key: boolean
+  multi_key_size: number
+  multi_key_status_list?: Record<string, number>
+  multi_key_disabled_reason?: Record<string, string>
+  multi_key_disabled_time?: Record<string, number>
+  multi_key_polling_index: number
+  multi_key_mode: 'random' | 'polling'
+}
+
+export interface Channel {
+  id: number
+  type: number
+  /** Always empty in list/detail payloads; only a create/edit body carries it. */
+  key: string
+  openai_organization?: string | null
+  test_model?: string | null
+  /** 1 enabled, 2 manually disabled, 3 auto-disabled. */
+  status: number
+  name: string
+  weight?: number | null
+  created_time: number
+  test_time: number
+  /** Milliseconds. */
+  response_time: number
+  base_url?: string | null
+  other: string
+  /** Upstream account balance in USD (not internal quota). */
+  balance: number
+  balance_updated_time: number
+  models: string
+  group: string
+  /** Internal quota units; convert with useQuota. */
+  used_quota: number
+  model_mapping?: string | null
+  status_code_mapping?: string | null
+  priority?: number | null
+  auto_ban?: number | null
+  other_info: string
+  tag?: string | null
+  setting?: string | null
+  param_override?: string | null
+  header_override?: string | null
+  remark?: string | null
+  channel_info: ChannelInfo
+  /** Other-settings JSON document (azure/vertex/aws members). */
+  settings: string
+}
+
+/** The members of the `setting` document the console manages. */
+export interface ChannelSettings {
+  force_format?: boolean
+  thinking_to_content?: boolean
+  proxy?: string
+  pass_through_body_enabled?: boolean
+  system_prompt?: string
+  system_prompt_override?: boolean
+  region?: string
+  data_collection?: string
+}
+
+/** The members of the `settings` (other settings) document the console manages. */
+export interface ChannelOtherSettings {
+  azure_responses_version?: string
+  vertex_key_type?: 'json' | 'api_key'
+  openrouter_enterprise?: boolean
+  aws_key_type?: 'ak_sk' | 'api_key'
+  allow_service_tier?: boolean
+  disable_store?: boolean
+  allow_safety_identifier?: boolean
+}
+
+/** Server envelope of the v1 handlers (HTTP 200 even on business failure). */
+export interface ServerResponse<T = undefined> {
+  success: boolean
+  message?: string
+  error_code?: string
+  data?: T
+}
+
+export interface ChannelListData {
+  items: Channel[]
+  total: number
+  page?: number
+  page_size?: number
+  type_counts?: Record<string, number>
+}
+
+export type GetChannelsResponse = ServerResponse<ChannelListData>
+export type SearchChannelsResponse = ServerResponse<ChannelListData>
+export type GetChannelResponse = ServerResponse<Channel>
+
+export interface ChannelTestResponse {
+  success: boolean
+  message?: string
+  error_code?: string
+  /** Seconds. */
+  time?: number
+}
+
+export interface ChannelBalanceResponse {
+  success: boolean
+  message?: string
+  /** USD. */
+  balance?: number
+}
+
+export type FetchModelsResponse = ServerResponse<string[]>
+
+export type CopyChannelResponse = ServerResponse<{ id: number }>
+
+export interface KeyStatus {
+  index: number
+  /** 1 enabled, 2 manually disabled, 3 auto-disabled. */
+  status: number
+  disabled_time?: number
+  reason?: string
+  key_preview?: string
+}
+
+export type MultiKeyConfirmAction = {
+  type:
+    | 'enable'
+    | 'disable'
+    | 'delete'
+    | 'enable-all'
+    | 'disable-all'
+    | 'delete-disabled'
+  keyIndex?: number
+}
+
+export interface MultiKeyStatusData {
+  keys: KeyStatus[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+  enabled_count: number
+  manual_disabled_count: number
+  auto_disabled_count: number
+}
+
+export type MultiKeyStatusResponse = ServerResponse<MultiKeyStatusData>
+
+export interface GetChannelsParams {
+  p?: number
+  page_size?: number
+  /** 'enabled' | 'disabled' | empty for all. */
+  status?: string
+  type?: number
+  group?: string
+  id_sort?: boolean
+  tag_mode?: boolean
+}
+
+export interface SearchChannelsParams {
+  keyword?: string
+  group?: string
+  model?: string
+  status?: string
+  type?: number
+  id_sort?: boolean
+  tag_mode?: boolean
+  p?: number
+  page_size?: number
+}
+
+export interface CopyChannelParams {
+  suffix?: string
+  reset_balance?: boolean
+}
+
+export interface MultiKeyManageParams {
+  channel_id: number
+  action:
+    | 'get_key_status'
+    | 'disable_key'
+    | 'enable_key'
+    | 'enable_all_keys'
+    | 'disable_all_keys'
+    | 'delete_key'
+    | 'delete_disabled_keys'
+  key_index?: number
+  page?: number
+  page_size?: number
+  status?: number
+}
+
+export interface BatchDeleteParams {
+  ids: number[]
+}
+
+export interface BatchSetTagParams {
+  ids: number[]
+  tag: string | null
+}
+
+export interface TagOperationParams {
+  tag: string
+  new_tag?: string
+  priority?: number
+  weight?: number
+  model_mapping?: string
+  models?: string
+  groups?: string
+}
+
+export interface AddChannelRequest {
+  mode: 'single' | 'batch' | 'multi_to_single'
+  multi_key_mode?: 'random' | 'polling'
+  batch_add_set_key_prefix_2_name?: boolean
+  channel: Partial<Channel>
+}

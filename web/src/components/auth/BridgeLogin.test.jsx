@@ -144,9 +144,7 @@ describe('BridgeLogin', () => {
     const [url] = apiPost.mock.calls[0];
     expect(url).toBe('/api/v2/bridge/exchange?token=probe-token&user_id=1');
     await waitFor(() =>
-      expect(replace).toHaveBeenCalledWith(
-        'https://uat.test/console/v2/dashboard',
-      ),
+      expect(replace).toHaveBeenCalledWith('https://uat.test/dashboard'),
     );
     expect(JSON.parse(localStorage.getItem('user')).username).toBe('root');
     // The slug comes from the response, never from a literal in this file.

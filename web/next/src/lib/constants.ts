@@ -2,8 +2,11 @@
  * Application-wide constants
  */
 
-/** Router basepath and Go-side mount point (web-router.go). */
-export const APP_BASEPATH = '/next'
+/**
+ * Router basepath. The console owns the site root (web-router.go); only its
+ * build assets keep the /next/ prefix (rsbuild assetPrefix).
+ */
+export const APP_BASEPATH = '/'
 
 /** Where the legacy (Semi UI) console lives. */
 export const LEGACY_CONSOLE_URL = '/console/v2/dashboard'

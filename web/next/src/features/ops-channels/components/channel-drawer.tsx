@@ -1,3 +1,21 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
@@ -15,25 +33,27 @@ import { toApiError } from '@/lib/api'
 
 import { channelDetailQueryOptions } from '../api'
 import { channelTypeName } from '../lib/map'
-import type { ChannelListItem } from '../types'
+import { useChannelAccess } from '../hooks/use-channel-access'
+import { useChannels } from './channels-provider'
 import { HealthTab } from './health-tab'
 import { KeysTab } from './keys-tab'
 import { PlanTab } from './plan-tab'
 import { UsageTab } from './usage-tab'
 
-export function ChannelDrawer(props: {
-  channel: ChannelListItem | null
-  canWrite: boolean
-  onClose: () => void
+/**
+ * Operations sheet for one channel: health, key pool, usage and plan settings
+ * (the tenant-scoped v2 console endpoints). Opened from the row menu; the row
+ * comes from the table context.
+ */
+export function ChannelOpsSheet(props: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
 }) {
-  const ch = props.channel
+  const { currentRow } = useChannels()
+  const { canEditSensitive } = useChannelAccess()
+  const ch = currentRow
   return (
-    <Sheet
-      open={ch !== null}
-      onOpenChange={(open) => {
-        if (!open) props.onClose()
-      }}
-    >
+    <Sheet open={props.open && ch !== null} onOpenChange={props.onOpenChange}>
       <SheetContent className='w-full overflow-y-auto sm:max-w-xl'>
         {ch && (
           <>
@@ -46,8 +66,8 @@ export function ChannelDrawer(props: {
             <div className='px-4 pb-4'>
               <DrawerBody
                 key={ch.id}
-                channel={ch}
-                canWrite={props.canWrite}
+                channelId={ch.id}
+                canWrite={canEditSensitive}
               />
             </div>
           </>
@@ -57,9 +77,9 @@ export function ChannelDrawer(props: {
   )
 }
 
-function DrawerBody(props: { channel: ChannelListItem; canWrite: boolean }) {
+function DrawerBody(props: { channelId: number; canWrite: boolean }) {
   const { t } = useTranslation()
-  const id = props.channel.id
+  const id = props.channelId
   const detail = useQuery(channelDetailQueryOptions(id))
 
   let plan

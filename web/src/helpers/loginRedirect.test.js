@@ -61,6 +61,8 @@ describe('readRedirectParam / postLoginUrl', () => {
   });
 
   it('falls back to the default landing page', () => {
+    // The new console owns the site root; signing in lands on its dashboard.
+    expect(DEFAULT_LANDING).toBe('/dashboard');
     window.history.replaceState(null, '', '/login');
     expect(postLoginUrl('https://hub.example')).toBe(
       `https://hub.example${DEFAULT_LANDING}`,

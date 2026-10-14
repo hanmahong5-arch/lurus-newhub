@@ -1,126 +1,65 @@
-import { useQuery } from '@tanstack/react-query'
-import { Link, Outlet, useRouterState } from '@tanstack/react-router'
-import { ArrowLeft } from 'lucide-react'
+import { Outlet } from '@tanstack/react-router'
 import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
 
-import { LanguageSwitcher } from '@/components/language-switcher'
+import { CommandMenu } from '@/components/command-menu'
 import { SkipToMain } from '@/components/skip-to-main'
-import { ThemeSwitch } from '@/components/theme-switch'
-import {
-  Sidebar,
-  SidebarContent,
-  SidebarFooter,
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarGroupLabel,
-  SidebarHeader,
-  SidebarInset,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-  SidebarProvider,
-  SidebarRail,
-  SidebarTrigger,
-} from '@/components/ui/sidebar'
-import { BRAND_NAME, LEGACY_CONSOLE_URL, PRODUCT_NAME } from '@/lib/constants'
-import { currentUserQueryOptions, userAccess } from '@/lib/user'
+import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
+import { LayoutProvider } from '@/context/layout-provider'
+import { SearchProvider } from '@/context/search-provider'
+import { ThemeCustomizationProvider } from '@/context/theme-customization-provider'
+import { getCookie } from '@/lib/cookies'
+import { cn } from '@/lib/utils'
 
-import { visibleNavGroups } from './nav'
+import { AppHeader } from './app-header'
+import { AppSidebar } from './app-sidebar'
 import { PageFooterProvider } from './page-footer'
-import { UserMenu } from './user-menu'
 
-function Brand() {
-  return (
-    <div className='flex items-center gap-2 px-2 py-1.5'>
-      <img src='/next/logo.png' alt='' className='size-7 rounded-md' />
-      <div className='grid leading-tight group-data-[collapsible=icon]:hidden'>
-        <span className='text-sm font-semibold'>{BRAND_NAME}</span>
-        <span className='text-muted-foreground text-xs'>{PRODUCT_NAME}</span>
-      </div>
-    </div>
-  )
-}
-
-function AppSidebar() {
-  const { t } = useTranslation()
-  const { data: user } = useQuery(currentUserQueryOptions)
-  const pathname = useRouterState({ select: (s) => s.location.pathname })
-  const groups = visibleNavGroups(userAccess(user))
-
-  return (
-    <Sidebar collapsible='icon' variant='inset'>
-      <SidebarHeader>
-        <Brand />
-      </SidebarHeader>
-      <SidebarContent>
-        {groups.map((group) => (
-          <SidebarGroup key={group.id}>
-            <SidebarGroupLabel>{t(group.label)}</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {group.items.map((item) => (
-                  <SidebarMenuItem key={item.id}>
-                    <SidebarMenuButton
-                      isActive={pathname.startsWith(item.to)}
-                      tooltip={t(item.label)}
-                      render={<Link to={item.to} />}
-                    >
-                      <item.icon />
-                      <span>{t(item.label)}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        ))}
-      </SidebarContent>
-      <SidebarFooter>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              tooltip={t('Back to the previous console')}
-              render={<a href={LEGACY_CONSOLE_URL} />}
-            >
-              <ArrowLeft />
-              <span>{t('Back to the previous console')}</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarFooter>
-      <SidebarRail />
-    </Sidebar>
-  )
-}
-
-/** Authenticated layout: sidebar, top bar, routed page. */
+/**
+ * Authenticated layout: top bar over a sidebar + content row. The providers
+ * the shell owns (layout, theme customization, command palette) are mounted
+ * here because the app root is not part of this module.
+ *
+ * The content area is a fixed-height column that scrolls on its own, which is
+ * what SectionPageLayout (and the data-table pagination footer) expect.
+ */
 export function AppShell() {
   // Pages (data tables) portal their pagination into this footer slot.
   const [footer, setFooter] = useState<HTMLDivElement | null>(null)
+  const defaultOpen = getCookie('sidebar_state') !== 'false'
+
   return (
-    <SidebarProvider>
-      <SkipToMain />
-      <AppSidebar />
-      <SidebarInset>
-        <header className='flex h-14 shrink-0 items-center gap-2 px-4'>
-          <SidebarTrigger className='-ms-1' />
-          <div className='ms-auto flex items-center gap-1'>
-            <LanguageSwitcher />
-            <ThemeSwitch />
-            <UserMenu />
-          </div>
-        </header>
-        <main
-          id='content'
-          className='flex flex-1 flex-col gap-6 p-4 pt-0 sm:p-6 sm:pt-0'
-        >
-          <PageFooterProvider container={footer}>
-            <Outlet />
-          </PageFooterProvider>
-        </main>
-        <div ref={setFooter} className='sticky bottom-0 empty:hidden' />
-      </SidebarInset>
-    </SidebarProvider>
+    <ThemeCustomizationProvider>
+      <LayoutProvider>
+        <SidebarProvider defaultOpen={defaultOpen} className='flex-col'>
+          <SearchProvider>
+            <SkipToMain />
+            <CommandMenu />
+            <AppHeader />
+            <div className='flex min-h-0 w-full flex-1'>
+              <AppSidebar />
+              <SidebarInset
+                className={cn(
+                  '@container/content',
+                  'h-[calc(100svh-var(--app-header-height,0px))]',
+                  'min-h-0 min-w-0 overflow-hidden',
+                  'peer-data-[variant=inset]:h-[calc(100svh-var(--app-header-height,0px)-(var(--spacing)*4))]'
+                )}
+              >
+                <div
+                  id='content'
+                  tabIndex={-1}
+                  className='flex min-h-0 flex-1 flex-col overflow-y-auto outline-none'
+                >
+                  <PageFooterProvider container={footer}>
+                    <Outlet />
+                  </PageFooterProvider>
+                </div>
+                <div ref={setFooter} className='sticky bottom-0 empty:hidden' />
+              </SidebarInset>
+            </div>
+          </SearchProvider>
+        </SidebarProvider>
+      </LayoutProvider>
+    </ThemeCustomizationProvider>
   )
 }

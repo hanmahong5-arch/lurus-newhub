@@ -25,7 +25,11 @@ import {
   EMPTY_FORM,
   buildWriteBody,
   dateInputToUnix,
+  dateToExpiry,
+  expiryAfter,
+  expiryToDate,
   formFromToken,
+  unixToDateTimeInput,
 } from './form'
 import {
   mapProjects,
@@ -34,9 +38,11 @@ import {
   tokenState,
 } from './map'
 import { parseCapInput, quotaToDisplayInput, quotaView } from './quota'
+import { joinModels, splitIps, splitModels } from './restrictions'
 import {
   buildSnippets,
   clientEndpoints,
+  WIRE_CHAT,
   limitToToken,
   relayHost,
 } from './snippets'
@@ -243,6 +249,64 @@ describe('buildWriteBody', () => {
   })
 })
 
+describe('expiry with a time of day', () => {
+  it('a datetime value is that exact local minute', () => {
+    expect(dateInputToUnix('2030-01-02T08:30')).toBe(
+      Math.floor(new Date('2030-01-02T08:30:00').getTime() / 1000)
+    )
+    expect(Number.isNaN(dateInputToUnix('2030-01-02Tnope'))).toBe(true)
+  })
+
+  it('round-trips unix seconds through the form value and a Date', () => {
+    const sec = Math.floor(new Date('2030-03-04T05:06:00').getTime() / 1000)
+    const text = unixToDateTimeInput(sec)
+    expect(text).toBe('2030-03-04T05:06')
+    expect(dateInputToUnix(text)).toBe(sec)
+    expect(dateToExpiry(expiryToDate(text))).toBe(text)
+    expect(unixToDateTimeInput(-1)).toBe('')
+    expect(expiryToDate('')).toBeUndefined()
+    expect(dateToExpiry(undefined)).toBe('')
+  })
+
+  it('presets are relative to the given moment', () => {
+    const from = new Date('2030-01-31T10:00:00')
+    expect(expiryAfter(from, { hours: 1 })).toBe('2030-01-31T11:00')
+    expect(expiryAfter(from, { days: 1 })).toBe('2030-02-01T10:00')
+  })
+
+  it('an untouched expiry keeps its stored seconds on edit', () => {
+    const stored = Math.floor(new Date('2030-01-02T23:59:59').getTime() / 1000)
+    const t = token({ expired_time: stored, unlimited_quota: true })
+    const r = buildWriteBody(formFromToken(t, usd), usd, 0, stored)
+    expect(r.ok && r.body.expired_time).toBe(stored)
+    const moved = {
+      ...formFromToken(t, usd),
+      expiry: '2031-01-02T10:00',
+    }
+    const r2 = buildWriteBody(moved, usd, 0, stored)
+    expect(r2.ok && r2.body.expired_time).toBe(
+      Math.floor(new Date('2031-01-02T10:00:00').getTime() / 1000)
+    )
+  })
+})
+
+describe('restrictions', () => {
+  it('splits and de-duplicates the model allowlist', () => {
+    expect(splitModels(' a, b ,,a')).toEqual(['a', 'b'])
+    expect(splitModels('')).toEqual([])
+    expect(joinModels(['a', 'b'])).toBe('a,b')
+  })
+
+  it('splits allowed IPs on newlines and commas', () => {
+    expect(splitIps('1.1.1.1\n2.2.2.2, 3.3.3.3\n')).toEqual([
+      '1.1.1.1',
+      '2.2.2.2',
+      '3.3.3.3',
+    ])
+    expect(splitIps('')).toEqual([])
+  })
+})
+
 describe('snippets', () => {
   it('uses the configured host, else the origin, without a trailing slash', () => {
     expect(relayHost('', 'https://hub.example/')).toBe('https://hub.example')
@@ -259,8 +323,8 @@ describe('snippets', () => {
     expect(s.curl).toContain('https://h/v1/chat/completions')
     expect(s.curl).toContain('Bearer sk-1')
     expect(s.python).toContain('https://h/v1/chat/completions')
-    expect(s.anthropic).toBe('')
-    expect(buildSnippets('k', 'https://h', 'm1', 'c1').anthropic).toContain(
+    expect(s.messages).toBe('')
+    expect(buildSnippets('k', 'https://h', 'm1', 'c1').messages).toContain(
       '"model":"c1"'
     )
     expect(clientEndpoints('https://h').map((e) => e[1])).toEqual([
@@ -272,8 +336,8 @@ describe('snippets', () => {
 
   it('narrows models to a key allowlist', () => {
     const models = [
-      { id: 'a', supported_endpoint_types: ['openai'] },
-      { id: 'b', supported_endpoint_types: ['openai'] },
+      { id: 'a', supported_endpoint_types: [WIRE_CHAT] },
+      { id: 'b', supported_endpoint_types: [WIRE_CHAT] },
     ]
     expect(
       limitToToken(models, { model_limits_enabled: true, model_limits: 'b, c' })

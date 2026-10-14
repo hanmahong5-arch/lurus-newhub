@@ -18,8 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { ApiToken, RoutableModel } from '../types'
 
-export const WIRE_OPENAI = 'openai'
-export const WIRE_ANTHROPIC = 'anthropic'
+/** Wire-format ids exactly as the server's supported_endpoint_types spells them. */
+export const WIRE_CHAT = 'openai'
+export const WIRE_MESSAGES = 'anthropic'
 
 /** Stand-in shown when the plaintext key is not available any more. */
 export const KEY_PLACEHOLDER = 'YOUR_API_KEY'
@@ -71,21 +72,21 @@ export function firstModelFor(
   )
 }
 
-export type SnippetTab = 'curl' | 'python' | 'node' | 'anthropic'
+export type SnippetTab = 'curl' | 'python' | 'node' | 'messages'
 
 export interface Snippets {
   curl: string
   python: string
   node: string
   /** Empty when no routable model speaks the messages wire. */
-  anthropic: string
+  messages: string
 }
 
 export function buildSnippets(
   key: string,
   host: string,
   chatModel: string,
-  anthropicModel: string | null
+  messagesModel: string | null
 ): Snippets {
   return {
     curl: `curl ${host}/v1/chat/completions \\
@@ -115,11 +116,11 @@ print(resp.json()["choices"][0]["message"]["content"])`,
   }),
 });
 console.log(await resp.json());`,
-    anthropic: anthropicModel
+    messages: messagesModel
       ? `curl ${host}/v1/messages \\
   -H "x-api-key: ${key}" \\
   -H "Content-Type: application/json" \\
-  -d '{"model":"${anthropicModel}","max_tokens":1024,"messages":[{"role":"user","content":"hi"}]}'`
+  -d '{"model":"${messagesModel}","max_tokens":1024,"messages":[{"role":"user","content":"hi"}]}'`
       : '',
   }
 }

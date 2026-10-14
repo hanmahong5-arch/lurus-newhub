@@ -16,14 +16,21 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { http, tenantApi, unwrap } from '@/lib/api'
+import { api, http, tenantApi, unwrap } from '@/lib/api'
 
 import {
   LOG_PAGE_SIZE,
   REALTIME_WINDOW_SECONDS,
   TREND_WINDOW_SECONDS,
 } from './kpis'
-import type { LogRow, QuotaRow, RealtimeLogs, TrendData } from './types'
+import type {
+  LogRow,
+  PerformanceData,
+  PerformanceRow,
+  QuotaRow,
+  RealtimeLogs,
+  TrendData,
+} from './types'
 
 /**
  * Last 5 minutes of the tenant's own logs. GET /logs answers
@@ -60,4 +67,47 @@ export async function fetchTrend(
   })
   const rows = unwrap<QuotaRow[] | null>(res.data, res.status)
   return { rows: Array.isArray(rows) ? rows : [], start, end: nowSec }
+}
+
+/**
+ * Per (model, hour) quota rows for an explicit span. The server rejects a span
+ * over 2,592,000s with HTTP 200 + success:false, which `unwrap` turns into a
+ * thrown ApiError, so a rejected span can never read as "no usage".
+ */
+export async function fetchQuotaRows(
+  start: number,
+  end: number
+): Promise<QuotaRow[]> {
+  const res = await http.get<unknown>('/api/data/self/', {
+    params: { start_timestamp: start, end_timestamp: end },
+  })
+  const rows = unwrap<QuotaRow[] | null>(res.data, res.status)
+  return Array.isArray(rows) ? rows : []
+}
+
+/**
+ * Per-model latency / error rate for this tenant. Everyone sees the quality
+ * fields; tenant admins also get request / token volume.
+ */
+export async function fetchPerformance(
+  hours: number
+): Promise<PerformanceData> {
+  const d = await tenantApi.get<{
+    hours?: number
+    min_samples?: number
+    items?: PerformanceRow[]
+  } | null>('/models/performance', { params: { hours } })
+  return {
+    hours: typeof d?.hours === 'number' ? d.hours : hours,
+    minSamples: typeof d?.min_samples === 'number' ? d.min_samples : null,
+    items: Array.isArray(d?.items) ? d.items : [],
+  }
+}
+
+/** The operator's notice (markdown / html); '' when none is set. */
+export async function fetchNotice(): Promise<string> {
+  const d = await api.get<string | null>('/api/notice', {
+    skipAuthRedirect: true,
+  })
+  return typeof d === 'string' ? d.trim() : ''
 }

@@ -17,17 +17,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
+import { BarChart3 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
-import { Skeleton } from '@/components/ui/skeleton'
 
 import {
   fetchRankings,
@@ -35,6 +29,7 @@ import {
   type RankingDimension,
 } from '../lib/rankings'
 
+import { Panel } from './panel'
 import { LoadFailed } from './panels'
 
 const DIMENSION_LABEL: Record<RankingDimension, string> = {
@@ -61,9 +56,13 @@ export function RankingsPanel() {
   })
   const rows = q.data ?? []
   return (
-    <Card data-testid='dashboard-rankings'>
-      <CardHeader>
-        <CardTitle>{t('Usage breakdown')}</CardTitle>
+    <Panel
+      testId='dashboard-rankings'
+      title={t('Usage breakdown')}
+      icon={<BarChart3 />}
+      tone='chart-2'
+      loadingHeight={q.isPending ? 'h-24' : undefined}
+      actions={
         <div
           role='radiogroup'
           aria-label={t('Group usage by')}
@@ -83,44 +82,42 @@ export function RankingsPanel() {
             </Button>
           ))}
         </div>
-      </CardHeader>
-      <CardContent>
-        {q.isPending && <Skeleton className='h-24 w-full' />}
-        {q.isError && (
-          <LoadFailed
-            message={t('Could not load the usage breakdown.')}
-            onRetry={() => void q.refetch()}
-          />
-        )}
-        {q.isSuccess && rows.length === 0 && (
-          <div className='text-muted-foreground text-sm'>
-            {t('No usage recorded yet.')}
-          </div>
-        )}
-        {q.isSuccess && rows.length > 0 && (
-          <ul className='flex flex-col gap-2' data-testid='rankings-rows'>
-            {rows.map((r) => (
-              <li key={r.name} className='text-sm'>
-                <div className='flex justify-between gap-3'>
-                  <span className='truncate'>{r.name}</span>
-                  <span className='text-muted-foreground tabular-nums'>
-                    {r.requests.toLocaleString()} {t('requests')} ·{' '}
-                    {r.token_share_pct.toFixed(1)}%
-                  </span>
-                </div>
-                <div className='bg-muted h-1.5 rounded'>
-                  <div
-                    className='bg-primary h-1.5 rounded'
-                    style={{
-                      width: `${Math.min(100, Math.max(0, r.token_share_pct))}%`,
-                    }}
-                  />
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </CardContent>
-    </Card>
+      }
+    >
+      {q.isError && (
+        <LoadFailed
+          message={t('Could not load the usage breakdown.')}
+          onRetry={() => void q.refetch()}
+        />
+      )}
+      {q.isSuccess && rows.length === 0 && (
+        <div className='text-muted-foreground text-sm'>
+          {t('No usage recorded yet.')}
+        </div>
+      )}
+      {q.isSuccess && rows.length > 0 && (
+        <ul className='flex flex-col gap-2' data-testid='rankings-rows'>
+          {rows.map((r) => (
+            <li key={r.name} className='text-sm'>
+              <div className='flex justify-between gap-3'>
+                <span className='truncate'>{r.name}</span>
+                <span className='text-muted-foreground tabular-nums'>
+                  {r.requests.toLocaleString()} {t('requests')} ·{' '}
+                  {r.token_share_pct.toFixed(1)}%
+                </span>
+              </div>
+              <div className='bg-muted h-1.5 rounded'>
+                <div
+                  className='bg-primary h-1.5 rounded'
+                  style={{
+                    width: `${Math.min(100, Math.max(0, r.token_share_pct))}%`,
+                  }}
+                />
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
   )
 }
