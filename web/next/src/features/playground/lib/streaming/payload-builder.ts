@@ -86,10 +86,13 @@ export function buildCurlSnippet(
     "'",
     `'${backslash}''`
   )
+  // The console never holds a plaintext key, so the snippet carries a
+  // placeholder the reader replaces.
+  const apiKey = 'YOUR_API_KEY'
   return [
     `curl ${origin}/v1/chat/completions ${backslash}`,
     `  -H 'Content-Type: application/json' ${backslash}`,
-    `  -H 'Authorization: Bearer YOUR_API_KEY' ${backslash}`,
+    `  -H 'Authorization: Bearer ${apiKey}' ${backslash}`,
     `  -d '${json}'`,
   ].join('\n')
 }
