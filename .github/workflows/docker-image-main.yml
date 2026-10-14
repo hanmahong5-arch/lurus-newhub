@@ -169,6 +169,14 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           vuln-type: os,library
+          # The gate is HIGH/CRITICAL CVEs. Trivy also runs its secret scanner
+          # by default, over every file in the image; since the new console
+          # (#254) ships ~1,600 lazily loaded JS chunks that pushed analysis past
+          # the 5m default and the scan died with "Provide a higher timeout
+          # value" — no finding, no verdict. Secrets are gitleaks' job (Secret
+          # Scan / Web CI); this step scans for vulnerabilities only, with room.
+          scanners: vuln
+          timeout: 15m0s
           exit-code: '1'
 
   # Close the "cluster rolled without bumping the manifest" process gap the
