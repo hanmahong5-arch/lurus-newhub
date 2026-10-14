@@ -21,3 +21,9 @@ fbff5649ac0d66be63b135cccd40217ae08856d4:doc/seam-s1-stage-worklog-2026-06-21.md
 # exact commit+line the generic-api-key entropy rule flagged.
 ed0b260cd7604fe746f36cb2bd6bd37973dad47e:internal/app/openrouter_pool/writer_pg_test.go:generic-api-key:134
 ed0b260cd7604fe746f36cb2bd6bd37973dad47e:internal/app/relay/relay_coverage_gap_test.go:generic-api-key:238
+
+# Not a secret: an intermediate commit of the console port (PR #254) built the
+# playground's copy-as-curl snippet with the literal placeholder
+# "Authorization: Bearer YOUR_API_KEY". The file now interpolates the placeholder,
+# so the squashed commit on main is clean; this pins only the PR-range commit.
+019ceb4dc5f5441bb7b922389a10b3bd05347fb8:web/next/src/features/playground/lib/streaming/payload-builder.ts:curl-auth-header:90
