@@ -145,7 +145,7 @@ describe('BridgeLogin', () => {
     expect(url).toBe('/api/v2/bridge/exchange?token=probe-token&user_id=1');
     await waitFor(() =>
       expect(replace).toHaveBeenCalledWith(
-        'https://uat.test/console/v2/dashboard',
+        'https://uat.test/dashboard',
       ),
     );
     expect(JSON.parse(localStorage.getItem('user')).username).toBe('root');

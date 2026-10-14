@@ -179,7 +179,7 @@ describe('OidcRedirect — session bridge', () => {
     );
     expect(hrefWrites[0]).toBe(
       '/api/v2/auth/zita-login?return_to=' +
-        encodeURIComponent('https://hub.test/console/v2/dashboard'),
+        encodeURIComponent('https://hub.test/dashboard'),
     );
   });
 
@@ -200,7 +200,7 @@ describe('OidcRedirect — session bridge', () => {
     });
     expect(setTenantSlug).toHaveBeenCalledWith('acme');
     expect(replace).toHaveBeenCalledWith(
-      'https://hub.test/console/v2/dashboard',
+      'https://hub.test/dashboard',
     );
     // Having succeeded, it must not also kick off the identity login redirect.
     expect(hrefWrites).toEqual([]);
@@ -213,7 +213,7 @@ describe('OidcRedirect — session bridge', () => {
 
     expect(setTenantSlug).not.toHaveBeenCalled();
     expect(replace).toHaveBeenCalledWith(
-      'https://hub.test/console/v2/dashboard',
+      'https://hub.test/dashboard',
     );
   });
 
@@ -227,7 +227,7 @@ describe('OidcRedirect — session bridge', () => {
     expect(hrefWrites).toHaveLength(1);
     expect(hrefWrites[0]).toBe(
       '/api/v2/auth/zita-login?return_to=' +
-        encodeURIComponent('https://hub.test/console/v2/dashboard'),
+        encodeURIComponent('https://hub.test/dashboard'),
     );
   });
 
