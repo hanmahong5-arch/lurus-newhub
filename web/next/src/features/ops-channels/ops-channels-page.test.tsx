@@ -290,7 +290,10 @@ describe('channel drawer', () => {
       '/channels/1/health': healthBody({
         routable: false,
         reasons: ['cooling_429', 'plan_window_exhausted'],
-        cooldown_until: NOW + 125,
+        // Taken here, not from the module-level NOW: by the time this test
+        // runs on a loaded runner the file may be many seconds old, and
+        // NOW + 125 then renders as 1m 5Xs. 150s leaves a 30s margin.
+        cooldown_until: Math.floor(Date.now() / 1000) + 150,
       }),
     })
     await openDrawer()
