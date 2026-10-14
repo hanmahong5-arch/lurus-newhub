@@ -199,9 +199,7 @@ describe('OidcRedirect — session bridge', () => {
       tenant_slug: 'acme',
     });
     expect(setTenantSlug).toHaveBeenCalledWith('acme');
-    expect(replace).toHaveBeenCalledWith(
-      'https://hub.test/dashboard',
-    );
+    expect(replace).toHaveBeenCalledWith('https://hub.test/dashboard');
     // Having succeeded, it must not also kick off the identity login redirect.
     expect(hrefWrites).toEqual([]);
   });
@@ -212,9 +210,7 @@ describe('OidcRedirect — session bridge', () => {
     await flush();
 
     expect(setTenantSlug).not.toHaveBeenCalled();
-    expect(replace).toHaveBeenCalledWith(
-      'https://hub.test/dashboard',
-    );
+    expect(replace).toHaveBeenCalledWith('https://hub.test/dashboard');
   });
 
   it('treats a success envelope with no user id as "not signed in" and goes to identity login', async () => {
