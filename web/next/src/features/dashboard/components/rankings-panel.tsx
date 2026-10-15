@@ -22,12 +22,15 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 import {
   fetchRankings,
   RANKING_DIMENSIONS,
   type RankingDimension,
 } from '../lib/rankings'
+
+import { isBlankModel } from '../lib/model-name'
 
 import { Panel } from './panel'
 import { LoadFailed } from './panels'
@@ -55,6 +58,8 @@ export function RankingsPanel() {
     retry: false,
   })
   const rows = q.data ?? []
+  // A nameless row is unattributed traffic; for models say so precisely.
+  const blankLabel = by === 'model' ? t('Unknown model') : t('Unknown')
   return (
     <Panel
       testId='dashboard-rankings'
@@ -100,7 +105,14 @@ export function RankingsPanel() {
           {rows.map((r) => (
             <li key={r.name} className='text-sm'>
               <div className='flex justify-between gap-3'>
-                <span className='truncate'>{r.name}</span>
+                <span
+                  className={cn(
+                    'truncate',
+                    isBlankModel(r.name) && 'text-muted-foreground'
+                  )}
+                >
+                  {isBlankModel(r.name) ? blankLabel : r.name}
+                </span>
                 <span className='text-muted-foreground tabular-nums'>
                   {r.requests.toLocaleString()} {t('requests')} ·{' '}
                   {r.token_share_pct.toFixed(1)}%

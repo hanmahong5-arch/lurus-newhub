@@ -18,6 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { tenantApi } from '@/lib/api'
 
+import { blankLast } from './model-name'
+
 /**
  * Grouping dimensions the rankings endpoint accepts (see rankingDimensions in
  * v2_analytics_rankings.go). `vendor` is left out: it is platform-staff only
@@ -55,5 +57,6 @@ export async function fetchRankings(
     '/analytics/rankings',
     { params: { by, hours } }
   )
-  return Array.isArray(d?.rows) ? d.rows : []
+  // A row with no name (unattributed traffic) goes after every named one.
+  return Array.isArray(d?.rows) ? blankLast(d.rows, (r) => r.name) : []
 }

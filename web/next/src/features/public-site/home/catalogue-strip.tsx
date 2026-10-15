@@ -18,12 +18,31 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useTranslation } from 'react-i18next'
 
+import { cn } from '@/lib/utils'
+
 import { usePublicPricing } from '../queries'
+
+/**
+ * Fewest priced models for which the strip is worth showing. A catalogue of
+ * two or three models turns the strip into a row of tiny numbers that
+ * advertises how small the service is, so it stays hidden until it has some
+ * weight.
+ */
+export const MIN_PRICED_MODELS = 5
+
+// Whole class strings so Tailwind can see them: the grid follows how many
+// stats there are instead of leaving empty columns.
+const GRID_BY_COUNT: Record<number, string> = {
+  1: 'max-w-xs grid-cols-1',
+  2: 'max-w-md grid-cols-2',
+  3: 'max-w-3xl grid-cols-3',
+}
 
 /**
  * Live counts from the public price list. These are the only numbers on the
  * landing page and they are read, not written: when the list cannot be
- * loaded or is empty the strip does not render at all.
+ * loaded, or holds fewer than MIN_PRICED_MODELS priced models, the strip does
+ * not render at all.
  */
 export function CatalogueStrip() {
   const { t } = useTranslation()
@@ -31,7 +50,7 @@ export function CatalogueStrip() {
   // The endpoint lists priced models only; a row that says otherwise is not
   // counted as one.
   const rows = data?.rows.filter((row) => row.price_configured !== false) ?? []
-  if (!data || rows.length === 0) return null
+  if (!data || rows.length < MIN_PRICED_MODELS) return null
 
   const vendors = new Set<string>()
   const endpoints = new Set<string>()
@@ -57,7 +76,13 @@ export function CatalogueStrip() {
       aria-label={t('Live catalogue')}
       className='border-border/40 relative z-10 border-y px-6 py-10'
     >
-      <dl className='mx-auto grid max-w-3xl grid-cols-3 gap-6 text-center'>
+      <dl
+        data-testid='catalogue-stats'
+        className={cn(
+          'mx-auto grid gap-6 text-center',
+          GRID_BY_COUNT[stats.length] ?? GRID_BY_COUNT[3]
+        )}
+      >
         {stats.map((stat) => (
           <div key={stat.label} className='flex flex-col-reverse'>
             <dt className='text-muted-foreground mt-1 text-xs md:text-sm'>

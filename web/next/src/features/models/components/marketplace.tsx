@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -39,8 +39,11 @@ import {
   toCatalogFilter,
   type Filters,
 } from '../lib/filter-state';
+import { toggleCompareId } from '../lib/compare';
 import type { PerfWindow } from '../lib/perf';
 import { ModelCardGrid } from './card-grid';
+import { CompareBar, CompareSheet } from './compare';
+import { CompareContext } from './compare-context';
 import { FilterSidebar, type GroupOption } from './filter-sidebar';
 import { ModelDrawer } from './model-drawer';
 import { ModelTable } from './model-table';
@@ -74,12 +77,15 @@ export function Marketplace(props: MarketplaceProps) {
   // Without usage data "most used" would rank on nothing: hide it.
   const usageKnown = entries.some((e) => e.tokens !== null);
   const [sort, setSort] = useState<SortKey>(usageKnown ? 'popular' : 'name');
-  const effectiveSort: SortKey = usageKnown || sort !== 'popular' ? sort : 'name';
+  const effectiveSort: SortKey =
+    usageKnown || sort !== 'popular' ? sort : 'name';
   const [view, setView] = useDataTableViewMode({
     storageKey: 'models-view-mode',
     defaultMode: DATA_TABLE_VIEW_MODES.CARD,
   });
   const [openId, setOpenId] = useState<string | null>(null);
+  const [pickedIds, setPickedIds] = useState<string[]>([]);
+  const [comparing, setComparing] = useState(false);
 
   const shown = useMemo(
     () =>
@@ -90,6 +96,28 @@ export function Marketplace(props: MarketplaceProps) {
     [entries, q, filters, props.priceGroup, effectiveSort],
   );
   const open = openId ? (entries.find((e) => e.id === openId) ?? null) : null;
+  // Picks whose model left the catalogue (a refetch, another price group)
+  // neither count nor hold a slot.
+  const picked = useMemo(
+    () =>
+      pickedIds
+        .map((id) => entries.find((e) => e.id === id))
+        .filter((e): e is ModelEntry => e !== undefined),
+    [pickedIds, entries],
+  );
+  const liveIds = useMemo(() => picked.map((e) => e.id), [picked]);
+  const toggleCompare = useCallback(
+    (id: string) => {
+      const next = toggleCompareId(liveIds, id);
+      setPickedIds(next);
+      if (next.length === 0) setComparing(false);
+    },
+    [liveIds],
+  );
+  const compare = useMemo(
+    () => ({ ids: liveIds, toggle: toggleCompare }),
+    [liveIds, toggleCompare],
+  );
   const facetCount = activeFilterCount(filters, props.priceGroup);
   const filtered = Boolean(q.trim()) || facetCount > 0;
 
@@ -110,6 +138,20 @@ export function Marketplace(props: MarketplaceProps) {
       onReset={reset}
       activeCount={facetCount}
       className={className}
+    />
+  );
+
+  // The detail drawer opened from the comparison must sit inside it: stacked
+  // dialogs only know which one is on top (Escape, focus) when one is a React
+  // child of the other.
+  const comparisonShown = comparing && picked.length > 0;
+  const drawer = (
+    <ModelDrawer
+      entry={open}
+      onClose={() => setOpenId(null)}
+      groupRatios={props.groupRatios}
+      activeRatio={props.activeRatio}
+      onPerfWindowChange={props.onPerfWindowChange}
     />
   );
 
@@ -148,40 +190,53 @@ export function Marketplace(props: MarketplaceProps) {
   return (
     <PriceUnitContext.Provider value={unit}>
       <PerfWindowContext.Provider value={props.perfWindow}>
-        <div className='space-y-4'>
-          <SearchBar value={q} onChange={setQ} className='max-w-2xl' />
-          <div className='grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]'>
-            {rail(
-              'hidden xl:sticky xl:top-4 xl:block xl:max-h-[calc(100dvh-2rem)] xl:self-start xl:overflow-y-auto',
-            )}
-            <section className='min-w-0 space-y-4'>
-              <Toolbar
-                shown={shown.length}
-                total={entries.length}
-                filtered={filtered}
-                sort={effectiveSort}
-                usageKnown={usageKnown}
-                onSortChange={setSort}
-                unit={unit}
-                onUnitChange={setUnit}
-                perfWindow={props.perfWindow}
-                onPerfWindowChange={props.onPerfWindowChange}
-                view={view}
-                onViewChange={setView}
-                activeFilterCount={facetCount}
-                filterPanel={rail('border-0 bg-transparent p-0 shadow-none')}
-              />
-              {results}
-            </section>
+        <CompareContext.Provider value={compare}>
+          <div className='space-y-4'>
+            <SearchBar value={q} onChange={setQ} className='max-w-2xl' />
+            <div className='grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]'>
+              {rail(
+                'hidden xl:sticky xl:top-4 xl:block xl:max-h-[calc(100dvh-2rem)] xl:self-start xl:overflow-y-auto',
+              )}
+              <section className='min-w-0 space-y-4'>
+                <Toolbar
+                  shown={shown.length}
+                  total={entries.length}
+                  filtered={filtered}
+                  sort={effectiveSort}
+                  usageKnown={usageKnown}
+                  onSortChange={setSort}
+                  unit={unit}
+                  onUnitChange={setUnit}
+                  perfWindow={props.perfWindow}
+                  onPerfWindowChange={props.onPerfWindowChange}
+                  view={view}
+                  onViewChange={setView}
+                  activeFilterCount={facetCount}
+                  filterPanel={rail('border-0 bg-transparent p-0 shadow-none')}
+                />
+                {results}
+              </section>
+            </div>
+            {!comparisonShown && drawer}
+            <CompareBar
+              count={picked.length}
+              onOpen={() => setComparing(true)}
+              onClear={() => {
+                setPickedIds([]);
+                setComparing(false);
+              }}
+            />
+            <CompareSheet
+              entries={picked}
+              open={comparing}
+              onClose={() => setComparing(false)}
+              onRemove={toggleCompare}
+              onOpenDetails={setOpenId}
+            >
+              {comparisonShown && drawer}
+            </CompareSheet>
           </div>
-          <ModelDrawer
-            entry={open}
-            onClose={() => setOpenId(null)}
-            groupRatios={props.groupRatios}
-            activeRatio={props.activeRatio}
-            onPerfWindowChange={props.onPerfWindowChange}
-          />
-        </div>
+        </CompareContext.Provider>
       </PerfWindowContext.Provider>
     </PriceUnitContext.Provider>
   );

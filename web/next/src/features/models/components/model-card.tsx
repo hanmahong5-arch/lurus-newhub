@@ -23,7 +23,12 @@ import { useTranslation } from 'react-i18next';
 import { CopyButton } from '@/components/copy-button';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card';
+import {
+  Card,
+  CardContent,
+  CardFooter,
+  CardHeader,
+} from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 
 import {
@@ -31,6 +36,7 @@ import {
   formatCompact,
   type ModelEntry,
 } from '../lib/catalog';
+import { CompareToggle } from './compare';
 import { PerfBadge } from './perf-badge';
 import { BillingModeBadge, CallableBadge, PriceGrid } from './price';
 import { VendorIcon } from './vendor-icon';
@@ -154,10 +160,13 @@ export const ModelCard = memo(function ModelCard(props: {
       </CardContent>
       <CardFooter className='mt-auto border-0 bg-transparent pt-0'>
         <PerfBadge entry={e} className='border-border/60 border-t pt-2'>
-          <Button variant='ghost' size='sm' type='button'>
-            {t('Details')}
-            <ChevronRight aria-hidden className='size-3.5' />
-          </Button>
+          <div className='flex items-center gap-1'>
+            <CompareToggle id={e.id} />
+            <Button variant='ghost' size='sm' type='button'>
+              {t('Details')}
+              <ChevronRight aria-hidden className='size-3.5' />
+            </Button>
+          </div>
         </PerfBadge>
       </CardFooter>
     </Card>

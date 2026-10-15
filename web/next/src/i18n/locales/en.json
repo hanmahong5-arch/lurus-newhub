@@ -8,5 +8,18 @@
   "Audit Log": "Audit Log",
   "Redemption Codes": "Redemption Codes",
   "Users": "Users",
-  "System Settings": "System Settings"
+  "System Settings": "System Settings",
+  "Chat": "Chat",
+  "Setup Wizard": "Setup Wizard",
+  "Pricing Versions": "Pricing Versions",
+  "Model Performance": "Model Performance",
+  "Cost Intelligence": "Cost Intelligence",
+  "System Tasks": "System Tasks",
+  "Diagnostics": "Diagnostics",
+  "OpenRouter Sync": "OpenRouter Sync",
+  "Platform Administration": "Platform Administration",
+  "Tenants": "Tenants",
+  "Authorization": "Authorization",
+  "Model Rate Limits": "Model Rate Limits",
+  "Model Pools": "Model Pools"
 }

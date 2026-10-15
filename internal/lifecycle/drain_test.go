@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -230,12 +231,27 @@ func TestDefaultDrainer_IsProcessWideSingleton(t *testing.T) {
 // (the first listener-close failure) once every connection has gone idle,
 // which is how this test reaches the "shutdown error that is not a budget
 // timeout" branch without waiting out any deadline.
+//
+// accepting closes on the first Accept. net/http's Serve registers the
+// listener (the one Shutdown will close) before its accept loop, so once
+// Accept has been called Shutdown is guaranteed to reach Close. Dialling the
+// address is not that guarantee: the kernel completes a connection into the
+// backlog as soon as the socket listens, before the Serve goroutine runs, and
+// on a loaded runner Shutdown could then find no listener to close and report
+// a clean shutdown instead of the injected error.
 type drainFailingCloseListener struct {
 	net.Listener
-	closeErr error
+	closeErr  error
+	accepting chan struct{}
+	once      sync.Once
 }
 
-func (l drainFailingCloseListener) Close() error {
+func (l *drainFailingCloseListener) Accept() (net.Conn, error) {
+	l.once.Do(func() { close(l.accepting) })
+	return l.Listener.Accept()
+}
+
+func (l *drainFailingCloseListener) Close() error {
 	_ = l.Listener.Close()
 	return l.closeErr
 }
@@ -250,12 +266,21 @@ func (l drainFailingCloseListener) Close() error {
 // while still returning nil so main.go does not exit 1.
 func TestDrainerShutdown_NonTimeoutErrorIsNotReportedAsBudgetExceeded(t *testing.T) {
 	sentinel := errors.New("drain-test synthetic listener close failure")
-	listener := drainFailingCloseListener{Listener: fixShutdownListen(t), closeErr: sentinel}
+	listener := &drainFailingCloseListener{
+		Listener:  fixShutdownListen(t),
+		closeErr:  sentinel,
+		accepting: make(chan struct{}),
+	}
 	addr := listener.Addr().String()
 	srv := &http.Server{Addr: addr, Handler: http.NewServeMux()}
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(listener) }()
+	select {
+	case <-listener.accepting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve never reached Accept")
+	}
 	fixShutdownWaitReady(t, addr)
 
 	d := NewDrainer()

@@ -1,4 +1,16 @@
 import {
+  Activity,
+  BadgeDollarSign,
+  Building2,
+  Gauge,
+  Layers,
+  LockKeyhole,
+  MessagesSquare,
+  PiggyBank,
+  RefreshCw,
+  Stethoscope,
+  Timer,
+  Workflow,
   BarChart3,
   Boxes,
   CircleUserRound,
@@ -42,6 +54,18 @@ export interface NavItem {
     | '/admin/redemption-codes'
     | '/admin/users'
     | '/admin/settings'
+    | '/chat'
+    | '/org/flows'
+    | '/org/pricing'
+    | '/admin/tenants'
+    | '/admin/authz'
+    | '/admin/model-limits'
+    | '/admin/model-pools'
+    | '/admin/model-performance'
+    | '/admin/cost-intelligence'
+    | '/admin/system-tasks'
+    | '/admin/diagnostics'
+    | '/admin/openrouter-sync'
     | '/org/members'
     | '/org/departments'
     | '/org/keys-batch'
@@ -58,7 +82,7 @@ export interface NavItem {
 }
 
 export interface NavGroup {
-  id: 'workspace' | 'personal' | 'org' | 'ops'
+  id: 'workspace' | 'personal' | 'org' | 'ops' | 'admin'
   /** English source string; translated at render time. */
   label: string
   items: readonly NavItem[]
@@ -81,6 +105,13 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         to: '/playground',
         label: 'Playground',
         icon: FlaskConical,
+        requires: 'everyone',
+      },
+      {
+        id: 'chat',
+        to: '/chat',
+        label: 'Chat',
+        icon: MessagesSquare,
         requires: 'everyone',
       },
       {
@@ -193,6 +224,20 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: Ticket,
         requires: 'tenantAdmin',
       },
+      {
+        id: 'org-flows',
+        to: '/org/flows',
+        label: 'Setup Wizard',
+        icon: Workflow,
+        requires: 'tenantAdmin',
+      },
+      {
+        id: 'org-pricing',
+        to: '/org/pricing',
+        label: 'Pricing Versions',
+        icon: BadgeDollarSign,
+        requires: 'tenantAdmin',
+      },
     ],
   },
   {
@@ -221,6 +266,54 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         requires: 'platformStaff',
       },
       {
+        id: 'admin-model-performance',
+        to: '/admin/model-performance',
+        label: 'Model Performance',
+        icon: Activity,
+        requires: 'platformRoot',
+      },
+      {
+        id: 'admin-cost',
+        to: '/admin/cost-intelligence',
+        label: 'Cost Intelligence',
+        icon: PiggyBank,
+        requires: 'platformRoot',
+      },
+      {
+        id: 'admin-system-tasks',
+        to: '/admin/system-tasks',
+        label: 'System Tasks',
+        icon: Timer,
+        requires: 'platformRoot',
+      },
+      {
+        id: 'admin-diagnostics',
+        to: '/admin/diagnostics',
+        label: 'Diagnostics',
+        icon: Stethoscope,
+        requires: 'platformRoot',
+      },
+      {
+        id: 'admin-openrouter-sync',
+        to: '/admin/openrouter-sync',
+        label: 'OpenRouter Sync',
+        icon: RefreshCw,
+        requires: 'platformRoot',
+      },
+    ],
+  },
+  {
+    id: 'admin',
+    label: 'Platform Administration',
+    items: [
+      {
+        id: 'admin-tenants',
+        to: '/admin/tenants',
+        label: 'Tenants',
+        icon: Building2,
+        requires: 'platformRoot',
+      },
+      {
         id: 'admin-users',
         to: '/admin/users',
         label: 'Users',
@@ -228,11 +321,32 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         requires: 'platformStaff',
       },
       {
+        id: 'admin-authz',
+        to: '/admin/authz',
+        label: 'Authorization',
+        icon: LockKeyhole,
+        requires: 'platformRoot',
+      },
+      {
+        id: 'admin-model-limits',
+        to: '/admin/model-limits',
+        label: 'Model Rate Limits',
+        icon: Gauge,
+        requires: 'platformRoot',
+      },
+      {
+        id: 'admin-model-pools',
+        to: '/admin/model-pools',
+        label: 'Model Pools',
+        icon: Layers,
+        requires: 'platformRoot',
+      },
+      {
         id: 'admin-settings',
         to: '/admin/settings',
         label: 'System Settings',
         icon: Settings,
-        requires: 'platformStaff',
+        requires: 'platformRoot',
       },
     ],
   },

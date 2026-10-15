@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { formatChartTime, type TimeGranularity } from '@/lib/time'
 
 import { MAX_RANK_ROWS, MAX_SERIES } from './constants'
+import { blankLast, normalizeModel } from './model-name'
 import type { QuotaRow } from './types'
 
 export interface Metrics {
@@ -112,7 +113,7 @@ export function aggregateUsage(
   for (const row of rows) {
     const ts = num(row.created_at)
     if (!ts) continue
-    const model = row.model_name || 'Unknown'
+    const model = normalizeModel(row.model_name)
     const m: Metrics = {
       quota: num(row.quota),
       count: num(row.count),
@@ -141,9 +142,12 @@ export function aggregateUsage(
 
   return {
     buckets: [...map.values()].sort((a, b) => a.ts - b.ts),
-    models: [...modelTotals.entries()]
-      .map(([model, v]) => ({ model, ...v }))
-      .sort((a, b) => b.quota - a.quota || a.model.localeCompare(b.model)),
+    models: blankLast(
+      [...modelTotals.entries()]
+        .map(([model, v]) => ({ model, ...v }))
+        .sort((a, b) => b.quota - a.quota || a.model.localeCompare(b.model)),
+      (m) => m.model
+    ),
     totals,
   }
 }
@@ -158,7 +162,7 @@ export function perMinute(total: number, startSec: number, endSec: number) {
 export interface SeriesDef {
   /** Chart data key: m0, m1, ... (model names are not safe dataKeys). */
   key: string
-  /** Model name, or null for the folded remainder. */
+  /** Model name ('' = no name recorded), or null for the folded remainder. */
   model: string | null
 }
 
@@ -185,8 +189,11 @@ export function buildChartSeries(
   metric: 'quota' | 'count',
   limit = MAX_SERIES
 ): ChartSeries {
-  const ranked = [...usage.models].sort(
-    (a, b) => b[metric] - a[metric] || a.model.localeCompare(b.model)
+  const ranked = blankLast(
+    [...usage.models].sort(
+      (a, b) => b[metric] - a[metric] || a.model.localeCompare(b.model)
+    ),
+    (m) => m.model
   )
   const kept = ranked.slice(0, limit)
   const hasOther = ranked.length > kept.length
@@ -223,9 +230,12 @@ export function rankByCount(
   usage: Usage,
   limit = MAX_RANK_ROWS
 ): RankRow[] {
-  const ranked = usage.models
-    .filter((m) => m.count > 0)
-    .sort((a, b) => b.count - a.count || a.model.localeCompare(b.model))
+  const ranked = blankLast(
+    usage.models
+      .filter((m) => m.count > 0)
+      .sort((a, b) => b.count - a.count || a.model.localeCompare(b.model)),
+    (m) => m.model
+  )
   const top: RankRow[] = ranked
     .slice(0, limit)
     .map((m) => ({ model: m.model, count: m.count }))

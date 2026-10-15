@@ -67,7 +67,18 @@ FROM debian:bookworm-slim
 # CVE-2026-45447 libssl3 deb12u2) never reaches the image until the
 # instruction text changes. Bump the date whenever Trivy flags a fixed CVE.
 ARG SECURITY_REFRESH=2026-09-14
-RUN apt-get update \
+# DEBIAN_MIRROR (optional, e.g. http://mirrors.aliyun.com) replaces
+# deb.debian.org for this one apt run. The local CI pool reaches
+# deb.debian.org over a cross-border link that stalled this step for 20+
+# minutes on 2026-10-14/15 (4-20s per request, some never answered) while a
+# domestic mirror answered in 0.25s. Plain http on purpose: the slim base has
+# no CA bundle yet, and apt verifies every package against the archive's
+# signing keys regardless of transport. Unset = the stock sources.
+ARG DEBIAN_MIRROR=
+RUN if [ -n "$DEBIAN_MIRROR" ]; then \
+        sed -i "s#http://deb.debian.org#${DEBIAN_MIRROR}#g" /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates tzdata libasan8 wget \
     && rm -rf /var/lib/apt/lists/* \

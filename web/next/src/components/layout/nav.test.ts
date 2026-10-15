@@ -13,6 +13,7 @@ const ids = (user: Parameters<typeof userAccess>[0]) =>
 const WORKBENCH = [
   'dashboard',
   'playground',
+  'chat',
   'keys',
   'usage-logs',
   'tasks',
@@ -51,27 +52,49 @@ describe('visibleNavGroups', () => {
           'org-policy',
           'org-audit',
           'redemption-codes',
+          'org-flows',
+          'org-pricing',
         ],
       ],
     ])
   })
 
-  it('platform staff sees every group', () => {
+  it('platform staff (role 10) never sees the root-only platform pages', () => {
     const groups = ids({ role: 10, tenant_role: '' })
     expect(groups.map((g) => g[0])).toEqual([
       'workspace',
       'personal',
       'org',
       'ops',
+      'admin',
     ])
+    expect(groups[3][1]).toEqual(['ops-channels', 'ops-overview', 'ops-rules'])
+    // /api/v2/admin is RootJWTAuth: an entry a role-10 admin can only 403 on
+    // is not offered. Users (/api/user, AdminAuth) is the one they may run.
+    expect(groups[4][1]).toEqual(['admin-users'])
+    expect(groups[2][1]).toHaveLength(9)
+  })
+
+  it('platform root sees every platform page', () => {
+    const groups = ids({ role: 100, tenant_role: '' })
     expect(groups[3][1]).toEqual([
       'ops-channels',
       'ops-overview',
       'ops-rules',
+      'admin-model-performance',
+      'admin-cost',
+      'admin-system-tasks',
+      'admin-diagnostics',
+      'admin-openrouter-sync',
+    ])
+    expect(groups[4][1]).toEqual([
+      'admin-tenants',
       'admin-users',
+      'admin-authz',
+      'admin-model-limits',
+      'admin-model-pools',
       'admin-settings',
     ])
-    expect(groups[2][1]).toHaveLength(7)
   })
 
   it('treats a missing user as no access beyond the workbench', () => {
@@ -83,6 +106,7 @@ describe('userAccess', () => {
   it('maps role and tenant_role like the backend', () => {
     expect(userAccess({ role: 10 })).toMatchObject({
       isPlatformStaff: true,
+      isPlatformRoot: false,
       isTenantAdmin: true,
     })
     expect(

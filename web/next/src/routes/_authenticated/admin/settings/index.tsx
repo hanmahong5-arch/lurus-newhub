@@ -5,7 +5,7 @@ import { SystemSettingsPage } from '@/features/system-settings'
 
 function Guarded() {
   return (
-    <RequireAccess requires='platformStaff'>
+    <RequireAccess requires='platformRoot'>
       <SystemSettingsPage />
     </RequireAccess>
   )

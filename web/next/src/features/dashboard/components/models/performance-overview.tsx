@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils'
 import { PERFORMANCE_WINDOWS } from '../../lib/constants'
 import { fetchPerformance } from '../../lib/api'
 import { formatErrorRate, formatLatencyMs } from '../../lib/kpis'
+import { isBlankModel, useModelLabel } from '../../lib/model-name'
 import { hasVolume, sortPerformance } from '../../lib/performance'
 import type { PerformanceRow } from '../../lib/types'
 import { Panel, Segmented } from '../panel'
@@ -50,6 +51,7 @@ function rateClass(row: PerformanceRow): string {
  */
 export function PerformanceOverview() {
   const { t } = useTranslation()
+  const modelLabel = useModelLabel()
   const [hours, setHours] = useState<number>(24)
   const [expanded, setExpanded] = useState(false)
   const q = useQuery({
@@ -149,8 +151,15 @@ export function PerformanceOverview() {
                     data-testid='performance-row'
                     className='border-border/60 border-b last:border-0'
                   >
-                    <td className='max-w-56 truncate py-1.5 pe-3 font-mono'>
-                      {r.model_name}
+                    <td
+                      className={cn(
+                        'max-w-56 truncate py-1.5 pe-3',
+                        isBlankModel(r.model_name)
+                          ? 'text-muted-foreground'
+                          : 'font-mono'
+                      )}
+                    >
+                      {modelLabel(r.model_name)}
                       {!r.enough_samples && (
                         <span className='text-muted-foreground ms-2 font-sans'>
                           {t('Low sample')}
