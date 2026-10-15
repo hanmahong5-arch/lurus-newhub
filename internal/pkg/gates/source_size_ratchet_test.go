@@ -31,6 +31,7 @@ import (
 // repo/user_edit.go, app/quota_pool.go.
 var goSourceSizeCeilings = map[string]int{
 	"internal/adapter/handler/channel-test.go":         829,
+	"internal/adapter/handler/router/api-v2-router.go": 811, // 2026-10-15: +13 行登记 Switch 团队资料包的 5 条路由与 gzip 排除
 	"internal/adapter/handler/channel.go":              2433,
 	"internal/adapter/handler/deployment.go":           810,
 	"internal/adapter/handler/internal_api_ext.go":     1057,
