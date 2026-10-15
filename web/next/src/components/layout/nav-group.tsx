@@ -17,15 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Link } from '@tanstack/react-router'
-import { ChevronRight, ExternalLink } from 'lucide-react'
-import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible'
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -36,7 +29,6 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar'
 
-import type { ClassicNavGroup as ClassicNavGroupData } from './classic-nav'
 import type { NavGroup as NavGroupData } from './nav'
 
 /**
@@ -79,59 +71,6 @@ export function NavGroup(props: {
           ))}
         </SidebarMenu>
       </SidebarGroupContent>
-    </SidebarGroup>
-  )
-}
-
-/**
- * Links to legacy pages with no equivalent here yet. Plain anchors: following
- * one leaves the SPA. Collapsed by default; in icon mode the entries are shown
- * as icons so they stay reachable.
- */
-export function ClassicNavGroup(props: { group: ClassicNavGroupData }) {
-  const { t } = useTranslation()
-  const { state, isMobile } = useSidebar()
-  const [open, setOpen] = useState(false)
-  const iconMode = state === 'collapsed' && !isMobile
-
-  return (
-    <SidebarGroup>
-      <Collapsible open={iconMode || open} onOpenChange={setOpen}>
-        <SidebarGroupLabel
-          render={<CollapsibleTrigger className='w-full cursor-pointer' />}
-        >
-          {t(props.group.label)}
-          <ChevronRight
-            aria-hidden='true'
-            className={
-              open
-                ? 'ms-auto rotate-90 transition-transform duration-200'
-                : 'ms-auto transition-transform duration-200'
-            }
-          />
-        </SidebarGroupLabel>
-        <CollapsibleContent>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {props.group.items.map((item) => (
-                <SidebarMenuItem key={item.id}>
-                  <SidebarMenuButton
-                    tooltip={t(item.label)}
-                    render={<a href={item.href} />}
-                  >
-                    <item.icon />
-                    <span>{t(item.label)}</span>
-                    <ExternalLink
-                      aria-hidden='true'
-                      className='ms-auto size-3! opacity-60'
-                    />
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </CollapsibleContent>
-      </Collapsible>
     </SidebarGroup>
   )
 }

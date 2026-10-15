@@ -54,21 +54,12 @@ func isNextPath(urlPath string) bool {
 }
 
 // legacyOwnedPrefixes are the routes the legacy (Semi UI) console still
-// serves after the new console took over the site root: the sign-in flow
-// (OIDC redirect, UAT bridge login, IdP callback, first-run setup — the Go
-// handlers and the IdP redirect URIs name these paths) and everything under
-// /console, where the operator pages that have no new-console equivalent yet
-// live (the new console links to them from its "Classic console" group).
+// serves after the new console took over the site root. Since the sign-in
+// flow (/login, /bridge-login, /oauth/oidc, /setup, ...) moved into the new
+// console, only /console/* is left: old bookmarks and the e2e suite's
+// direct links. The new console links nothing there.
 var legacyOwnedPrefixes = []string{
 	"/console",
-	"/login",
-	"/register",
-	"/bridge-login",
-	"/oauth",
-	"/setup",
-	"/account-disabled",
-	"/forbidden",
-	"/chat2link",
 }
 
 // isLegacyPath reports whether the legacy console serves a URL path: one of

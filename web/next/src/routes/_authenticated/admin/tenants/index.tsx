@@ -5,7 +5,7 @@ import { AdminTenantsPage } from '@/features/admin-tenants'
 
 function Guarded() {
   return (
-    <RequireAccess requires='platformStaff'>
+    <RequireAccess requires='platformRoot'>
       <AdminTenantsPage />
     </RequireAccess>
   )

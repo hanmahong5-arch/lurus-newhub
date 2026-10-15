@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -130,6 +130,34 @@ const PRICING_BODY = {
   usable_group: { default: 'Default', vip: 'VIP' },
   supported_endpoint: {},
 }
+
+/** `priced` priced rows over two vendors (and two endpoint formats), plus optional unpriced ones. */
+function catalogue(
+  priced: number,
+  opts: { unpriced?: number; bare?: boolean; noEndpoints?: boolean } = {}
+) {
+  const row = (i: number, configured: boolean) => ({
+    model_name: `model-${configured ? 'p' : 'u'}${i}`,
+    ...(opts.bare ? {} : { vendor_id: (i % 2) + 1 }),
+    quota_type: 0,
+    model_ratio: configured ? 1 : 0,
+    completion_ratio: 1,
+    enable_groups: ['default'],
+    supported_endpoint_types:
+      opts.bare || opts.noEndpoints ? [] : [i % 2 ? 'openai' : 'embeddings'],
+    price_configured: configured,
+  })
+  return {
+    ...PRICING_BODY,
+    data: [
+      ...Array.from({ length: priced }, (_, i) => row(i, true)),
+      ...Array.from({ length: opts.unpriced ?? 0 }, (_, i) => row(i, false)),
+    ],
+  }
+}
+
+/** Let in-flight queries land before asserting something is absent. */
+const settle = () => act(async () => new Promise((r) => setTimeout(r, 30)))
 
 interface World {
   status: Record<string, unknown>
@@ -264,7 +292,8 @@ describe('PublicLayout', () => {
 })
 
 describe('HomePage', () => {
-  it('shows the built-in landing, with live counts from the price list', async () => {
+  it('shows the built-in landing without the stats strip while the catalogue is small', async () => {
+    // PRICING_BODY holds two priced models (and one unpriced): below the bar.
     renderWith(<HomePage />)
     expect(
       await screen.findByRole('heading', {
@@ -272,10 +301,65 @@ describe('HomePage', () => {
         name: /One OpenAI-compatible endpoint/,
       })
     ).toBeInTheDocument()
-    // Two priced models from two vendors, read from the catalogue.
+    await waitFor(() =>
+      expect(httpGet).toHaveBeenCalledWith('/api/pricing', expect.anything())
+    )
+    await settle()
+    expect(screen.queryByLabelText('Live catalogue')).not.toBeInTheDocument()
+  })
+
+  it('hides the strip at four priced models and shows live counts from five', async () => {
+    // Unpriced rows never count towards the bar.
+    world.pricing = () => ({
+      data: catalogue(4, { unpriced: 3 }),
+      status: 200,
+    })
+    const first = renderWith(<HomePage />)
+    await waitFor(() =>
+      expect(httpGet).toHaveBeenCalledWith('/api/pricing', expect.anything())
+    )
+    await settle()
+    expect(screen.queryByLabelText('Live catalogue')).not.toBeInTheDocument()
+    first.unmount()
+
+    world.pricing = () => ({ data: catalogue(5), status: 200 })
+    renderWith(<HomePage />)
     const strip = await screen.findByLabelText('Live catalogue')
-    expect(within(strip).getByText('priced models')).toBeInTheDocument()
+    expect(within(strip).getByText('priced models').nextSibling).toHaveTextContent(
+      '5'
+    )
+    // Two vendors and two endpoint formats, derived from the rows.
     expect(within(strip).getByText('vendors').nextSibling).toHaveTextContent('2')
+    expect(within(strip).getByText('API formats').nextSibling).toHaveTextContent(
+      '2'
+    )
+    expect(screen.getByTestId('catalogue-stats').className).toContain(
+      'grid-cols-3'
+    )
+  })
+
+  it('sizes the strip grid to the stats it shows', async () => {
+    // No vendor and no endpoint on any row: the count of models stands alone.
+    world.pricing = () => ({ data: catalogue(6, { bare: true }), status: 200 })
+    const alone = renderWith(<HomePage />)
+    await screen.findByLabelText('Live catalogue')
+    const one = screen.getByTestId('catalogue-stats')
+    expect(one.children).toHaveLength(1)
+    expect(one.className).toContain('grid-cols-1')
+    expect(one.className).not.toContain('grid-cols-3')
+    alone.unmount()
+
+    // Vendors known, no endpoint formats: two stats, two columns.
+    world.pricing = () => ({
+      data: catalogue(6, { noEndpoints: true }),
+      status: 200,
+    })
+    renderWith(<HomePage />)
+    await screen.findByLabelText('Live catalogue')
+    const two = screen.getByTestId('catalogue-stats')
+    expect(two.children).toHaveLength(2)
+    expect(two.className).toContain('grid-cols-2')
+    expect(two.className).not.toContain('grid-cols-3')
   })
 
   it('keeps the landing for signed-in visitors and says "Go to console"', async () => {

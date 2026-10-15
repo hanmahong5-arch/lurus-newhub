@@ -5,7 +5,7 @@ import { AdminCostPage } from '@/features/admin-cost'
 
 function Guarded() {
   return (
-    <RequireAccess requires='platformStaff'>
+    <RequireAccess requires='platformRoot'>
       <AdminCostPage />
     </RequireAccess>
   )

@@ -5,7 +5,7 @@ import { AdminDiagnosticsPage } from '@/features/admin-diagnostics'
 
 function Guarded() {
   return (
-    <RequireAccess requires='platformStaff'>
+    <RequireAccess requires='platformRoot'>
       <AdminDiagnosticsPage />
     </RequireAccess>
   )

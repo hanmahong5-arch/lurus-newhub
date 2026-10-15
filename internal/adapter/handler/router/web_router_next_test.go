@@ -60,7 +60,9 @@ func TestWebRouter_SiteRootPagesGetTheNextDocument(t *testing.T) {
 
 	// "/nextfoo" and "/consolex" share a substring with a mount but are not
 	// under it, so they are new-console pages like any other.
-	for _, path := range []string{"/", "/dashboard", "/keys", "/usage-logs?p=2", "/pricing", "/pricing/model-a", "/models/deep/link", "/nextfoo", "/consolex", "/loginx"} {
+	// The sign-in flow is part of the new console too: the IdP redirect URIs
+	// and the Go handlers name these paths, and they must keep resolving.
+	for _, path := range []string{"/", "/dashboard", "/keys", "/usage-logs?p=2", "/pricing", "/pricing/model-a", "/models/deep/link", "/nextfoo", "/consolex", "/login", "/login/acme", "/register", "/bridge-login", "/oauth/oidc", "/setup", "/account-disabled", "/forbidden"} {
 		w := getPath(engine, path)
 		if w.Code != http.StatusOK {
 			t.Fatalf("GET %s = %d, want 200", path, w.Code)
@@ -74,12 +76,11 @@ func TestWebRouter_SiteRootPagesGetTheNextDocument(t *testing.T) {
 	}
 }
 
-func TestWebRouter_LegacyConsoleKeepsSignInAndConsolePaths(t *testing.T) {
+func TestWebRouter_LegacyConsoleKeepsOnlyConsolePaths(t *testing.T) {
 	engine := newConsoleEngine(t, nextDist())
 
-	// The sign-in flow is named by Go handlers and the IdP redirect URIs, and
-	// /console/* holds the operator pages the new console links back to.
-	for _, path := range []string{"/console", "/console/v2/dashboard", "/console/next/keys", "/console/openrouter-sync", "/login", "/login/acme", "/register", "/bridge-login", "/oauth/oidc", "/setup", "/account-disabled", "/forbidden", "/chat2link"} {
+	// Only /console/* is left on the legacy document (old bookmarks).
+	for _, path := range []string{"/console", "/console/v2/dashboard", "/console/next/keys", "/console/openrouter-sync"} {
 		w := getPath(engine, path)
 		if w.Code != http.StatusOK {
 			t.Fatalf("GET %s = %d, want 200", path, w.Code)

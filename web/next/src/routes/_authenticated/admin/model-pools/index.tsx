@@ -5,7 +5,7 @@ import { AdminModelPoolsPage } from '@/features/admin-model-pools'
 
 function Guarded() {
   return (
-    <RequireAccess requires='platformStaff'>
+    <RequireAccess requires='platformRoot'>
       <AdminModelPoolsPage />
     </RequireAccess>
   )

@@ -51,6 +51,7 @@ import {
   useSeriesName,
 } from '../../lib/series-style'
 import type { ModelAnalyticsChartTab } from '../../lib/types'
+import { useModelLabel } from '../../lib/model-name'
 import { Panel, Segmented } from '../panel'
 import { LoadFailed } from '../panels'
 
@@ -68,6 +69,7 @@ export interface ModelChartsProps {
 export function ModelCharts(props: ModelChartsProps) {
   const { t } = useTranslation()
   const nameOf = useSeriesName()
+  const modelLabel = useModelLabel()
   const [tab, setTab] = useState<ModelAnalyticsChartTab>(props.defaultChartTab)
   const [lastDefault, setLastDefault] = useState(props.defaultChartTab)
   if (lastDefault !== props.defaultChartTab) {
@@ -88,7 +90,7 @@ export function ModelCharts(props: ModelChartsProps) {
     [series, t]
   )
   const rankData = rank.map((r, i) => ({
-    name: r.model ?? t('Other'),
+    name: r.model === null ? t('Other') : modelLabel(r.model),
     count: r.count,
     fill: r.model == null ? 'var(--muted-foreground)' : getChartColor(i),
   }))

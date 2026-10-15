@@ -118,11 +118,11 @@ beforeEach(() => {
 })
 
 describe('AppSidebar', () => {
-  it('shows a plain member the workbench and no classic-console group', () => {
+  it('shows a plain member the workbench and no platform groups', () => {
     renderShell(<AppSidebar />)
     expect(screen.getByRole('link', { name: 'Dashboard' })).toBeTruthy()
     expect(screen.queryByText('Platform Operations')).toBeNull()
-    expect(screen.queryByText('Classic console')).toBeNull()
+    expect(screen.queryByText('Platform Administration')).toBeNull()
   })
 
   it('marks only the most specific entry as the current page', () => {
@@ -136,21 +136,28 @@ describe('AppSidebar', () => {
     ).toBeNull()
   })
 
-  it('offers root the classic links as plain anchors behind a disclosure', async () => {
+  it('gives root every platform page as an in-app link, nothing pointing at the old console', () => {
     renderShell(<AppSidebar />, user({ role: 100 }))
-    const toggle = screen.getByText('Classic console')
-    expect(screen.queryByText('Diagnostics')).toBeNull()
-    await userEvent.click(toggle)
-    const link = await screen.findByRole('link', { name: /Diagnostics/ })
-    expect(link.getAttribute('href')).toBe('/console/v2/admin/diagnostics')
+    expect(screen.getByText('Platform Administration')).toBeTruthy()
+    for (const [name, href] of [
+      ['Tenants', '/admin/tenants'],
+      ['Diagnostics', '/admin/diagnostics'],
+      ['Model Rate Limits', '/admin/model-limits'],
+      ['OpenRouter Sync', '/admin/openrouter-sync'],
+    ]) {
+      expect(screen.getByRole('link', { name }).getAttribute('href')).toBe(href)
+    }
+    for (const link of screen.getAllByRole('link')) {
+      expect(link.getAttribute('href') ?? '').not.toMatch(/^\/console/)
+    }
   })
 
-  it('shows a tenant admin only the tenant-level classic pages', async () => {
+  it('shows a tenant admin the tenant pages but no platform pages', () => {
     renderShell(<AppSidebar />, user({ tenant_role: 'admin' }))
-    await userEvent.click(screen.getByText('Classic console'))
-    expect(await screen.findByRole('link', { name: /Flows/ })).toBeTruthy()
-    expect(screen.getByRole('link', { name: /Pricing/ })).toBeTruthy()
-    expect(screen.queryByRole('link', { name: /Diagnostics/ })).toBeNull()
+    expect(screen.getByRole('link', { name: 'Setup Wizard' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Pricing Versions' })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'Diagnostics' })).toBeNull()
+    expect(screen.queryByText('Platform Administration')).toBeNull()
   })
 })
 
@@ -173,7 +180,7 @@ describe('command palette', () => {
     await userEvent.keyboard('{Control>}k{/Control}')
     await screen.findByPlaceholderText('Type a command or search...')
     expect(screen.queryByText('Platform Operations')).toBeNull()
-    expect(screen.queryByText('Classic console')).toBeNull()
+    expect(screen.queryByText('Platform Administration')).toBeNull()
   })
 })
 

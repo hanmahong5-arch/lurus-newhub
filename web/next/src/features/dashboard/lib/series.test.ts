@@ -154,3 +154,54 @@ describe('perMinute', () => {
     expect(perMinute(10, 200, 100)).toBe(0)
   })
 })
+
+describe('rows with no model name', () => {
+  const mixed: QuotaRow[] = [
+    // The nameless rows carry the most spend and calls.
+    { created_at: at(1), quota: 900, count: 9, token_used: 10 },
+    { model_name: '', created_at: at(2), quota: 100, count: 1, token_used: 1 },
+    { model_name: '  ', created_at: at(2), quota: 1, count: 1, token_used: 1 },
+    { model_name: 'a', created_at: at(1), quota: 300, count: 3, token_used: 3 },
+    { model_name: 'b', created_at: at(1), quota: 200, count: 2, token_used: 2 },
+  ]
+
+  it('aggregates every blank spelling into one empty-named entry listed last', () => {
+    const u = aggregateUsage(mixed, 'hour')
+    expect(u.models.map((m) => m.model)).toEqual(['a', 'b', ''])
+    // No placeholder text leaks into the data: labelling is the UI's job.
+    expect(u.models.some((m) => m.model === 'Unknown')).toBe(false)
+    expect(u.models[2]).toMatchObject({ quota: 1001, count: 11 })
+    expect(u.totals.quota).toBe(1501)
+  })
+
+  it('does not merge with a real model that happens to be called Unknown', () => {
+    const u = aggregateUsage(
+      [
+        { model_name: 'Unknown', created_at: at(1), quota: 5, count: 1 },
+        { created_at: at(1), quota: 7, count: 1 },
+      ],
+      'hour'
+    )
+    expect(u.models.map((m) => [m.model, m.quota])).toEqual([
+      ['Unknown', 5],
+      ['', 7],
+    ])
+  })
+
+  it('keeps the blank series after named ones in both rankings', () => {
+    const u = aggregateUsage(mixed, 'hour')
+    const bySpend = buildChartSeries(u, 'hour', 'quota')
+    expect(bySpend.series.map((s) => s.model)).toEqual(['a', 'b', ''])
+    const byCount = buildChartSeries(u, 'hour', 'count')
+    expect(byCount.series.map((s) => s.model)).toEqual(['a', 'b', ''])
+    expect(rankByCount(u).map((r) => r.model)).toEqual(['a', 'b', ''])
+  })
+
+  it('folds a blank series into other first when the series limit bites', () => {
+    const u = aggregateUsage(mixed, 'hour')
+    const { series, points } = buildChartSeries(u, 'hour', 'quota', 2)
+    expect(series.map((s) => s.model)).toEqual(['a', 'b', null])
+    const total = points.reduce((s, p) => s + (p[OTHER_KEY] as number), 0)
+    expect(total).toBe(1001)
+  })
+})

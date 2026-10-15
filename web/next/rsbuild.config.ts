@@ -16,12 +16,23 @@ export default defineConfig(({ envMode }) => {
     'http://localhost:3000'
 
   const isProd = envMode === 'production'
+  // The backend refuses browser POSTs from origins outside its allow-list
+  // (403 "cross-origin request refused"), and a dev page's Origin is
+  // localhost. Present the target's own origin so sign-in and every mutation
+  // work against a remote backend too. Dev server only.
   const devProxy = Object.fromEntries(
     (['/api', '/v1', '/pg'] as const).map((key) => [
       key,
-      { target: serverUrl, changeOrigin: true },
+      {
+        target: serverUrl,
+        changeOrigin: true,
+        headers: { origin: new URL(serverUrl).origin },
+      },
     ])
-  ) as Record<string, { target: string; changeOrigin: boolean }>
+  ) as Record<
+    string,
+    { target: string; changeOrigin: boolean; headers: Record<string, string> }
+  >
 
   return {
     plugins: [pluginReact(), pluginTailwindcss({ optimize: false })],

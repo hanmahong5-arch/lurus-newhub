@@ -18,7 +18,6 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { Link, useRouterState } from '@tanstack/react-router'
-import { ArrowLeft } from 'lucide-react'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -35,14 +34,12 @@ import {
 } from '@/components/ui/sidebar'
 import { useLayout } from '@/context/layout-provider'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
-import { LEGACY_CONSOLE_URL } from '@/lib/constants'
 import { getRoleLabel } from '@/lib/roles'
 import { currentUserQueryOptions, userAccess } from '@/lib/user'
 
-import { visibleClassicGroup } from './classic-nav'
 import { visibleNavGroups } from './nav'
 import { activeNavItemId } from './nav-active'
-import { ClassicNavGroup, NavGroup } from './nav-group'
+import { NavGroup } from './nav-group'
 
 function UserCard() {
   const { t } = useTranslation()
@@ -84,17 +81,15 @@ function UserCard() {
 }
 
 /**
- * Application sidebar: access-gated route groups, the classic-console links,
- * and a footer with the signed-in user. Layout (variant, collapse mode) comes
- * from the persisted LayoutProvider; mobile renders as a sheet.
+ * Application sidebar: access-gated route groups and a footer with the
+ * signed-in user. Layout (variant, collapse mode) comes from the persisted
+ * LayoutProvider; mobile renders as a sheet.
  */
 export function AppSidebar() {
-  const { t } = useTranslation()
   const { collapsible, variant } = useLayout()
   const { data: user } = useQuery(currentUserQueryOptions)
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const groups = useMemo(() => visibleNavGroups(userAccess(user)), [user])
-  const classic = useMemo(() => visibleClassicGroup(user), [user])
   const activeId = useMemo(
     () =>
       activeNavItemId(
@@ -110,19 +105,9 @@ export function AppSidebar() {
         {groups.map((group) => (
           <NavGroup key={group.id} group={group} activeId={activeId} />
         ))}
-        {classic != null && <ClassicNavGroup group={classic} />}
       </SidebarContent>
       <SidebarFooter>
         <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              tooltip={t('Back to the previous console')}
-              render={<a href={LEGACY_CONSOLE_URL} />}
-            >
-              <ArrowLeft />
-              <span>{t('Back to the previous console')}</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
           <SidebarMenuItem>
             <UserCard />
           </SidebarMenuItem>

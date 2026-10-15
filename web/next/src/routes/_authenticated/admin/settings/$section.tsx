@@ -6,7 +6,7 @@ import { SystemSettingsPage } from '@/features/system-settings'
 function Guarded() {
   const { section } = Route.useParams()
   return (
-    <RequireAccess requires='platformStaff'>
+    <RequireAccess requires='platformRoot'>
       <SystemSettingsPage section={section} />
     </RequireAccess>
   )

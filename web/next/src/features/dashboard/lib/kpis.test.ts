@@ -100,6 +100,52 @@ describe('costByModel', () => {
   })
 })
 
+describe('blank model names', () => {
+  it('costByModel keeps spend with no model name, as a blank row listed last', () => {
+    const out = costByModel([
+      consume(1, 900, ''),
+      consume(1, 100, 'a'),
+      consume(1, 50, 'b'),
+      consume(1, 20, ' '),
+    ])
+    // The nameless spend is the largest but never outranks a named model.
+    expect(out).toEqual([
+      { model: 'a', totalQuota: 100, requestCount: 1 },
+      { model: 'b', totalQuota: 50, requestCount: 1 },
+      { model: '', totalQuota: 920, requestCount: 2 },
+    ])
+  })
+
+  it('modelDistribution folds nameless rows into one blank entry listed last', () => {
+    const out = modelDistribution([
+      { model_name: 'a', quota: 3 },
+      { quota: 40 },
+      { model_name: '', quota: 2 },
+      { model_name: 'b', quota: 5 },
+    ])
+    expect(out).toEqual([
+      { model: 'b', quota: 5 },
+      { model: 'a', quota: 3 },
+      { model: '', quota: 42 },
+    ])
+  })
+
+  it('modelDistribution cuts off by spend, then lists the blank entry last', () => {
+    const out = modelDistribution(
+      [
+        { model_name: 'a', quota: 3 },
+        { model_name: 'b', quota: 5 },
+        { quota: 4 },
+      ],
+      2
+    )
+    expect(out).toEqual([
+      { model: 'b', quota: 5 },
+      { model: '', quota: 4 },
+    ])
+  })
+})
+
 describe('trend series', () => {
   const noon = (y: number, m: number, d: number) =>
     Math.floor(new Date(y, m - 1, d, 12).getTime() / 1000)

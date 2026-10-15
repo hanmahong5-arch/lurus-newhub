@@ -5,7 +5,7 @@ import { AdminOpenRouterSyncPage } from '@/features/admin-openrouter-sync'
 
 function Guarded() {
   return (
-    <RequireAccess requires='platformStaff'>
+    <RequireAccess requires='platformRoot'>
       <AdminOpenRouterSyncPage />
     </RequireAccess>
   )

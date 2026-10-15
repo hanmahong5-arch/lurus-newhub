@@ -5,7 +5,7 @@ import { AdminSystemTasksPage } from '@/features/admin-system-tasks'
 
 function Guarded() {
   return (
-    <RequireAccess requires='platformStaff'>
+    <RequireAccess requires='platformRoot'>
       <AdminSystemTasksPage />
     </RequireAccess>
   )

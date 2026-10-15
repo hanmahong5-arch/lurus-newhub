@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { blankLast, normalizeModel } from './model-name'
 import type { LogRow, QuotaRow } from './types'
 
 export const LOG_TYPE_CONSUME = 2
@@ -88,20 +89,26 @@ export interface ModelCost {
   requestCount: number
 }
 
-/** Consume logs grouped by model, largest spend first. */
+/**
+ * Consume logs grouped by model, largest spend first. Spend with no model
+ * name is real spend: it stays in the list as the blank row, shown last.
+ */
 export function costByModel(logs: LogRow[]): ModelCost[] {
   const by = new Map<string, ModelCost>()
   for (const l of logs) {
     if (num(l.type) !== LOG_TYPE_CONSUME) continue
-    const model = l.model_name || ''
+    const model = normalizeModel(l.model_name)
     const q = num(l.quota)
-    if (!model || q <= 0) continue
+    if (q <= 0) continue
     const prev = by.get(model) ?? { model, totalQuota: 0, requestCount: 0 }
     prev.totalQuota += q
     prev.requestCount += 1
     by.set(model, prev)
   }
-  return [...by.values()].sort((a, b) => b.totalQuota - a.totalQuota)
+  return blankLast(
+    [...by.values()].sort((a, b) => b.totalQuota - a.totalQuota),
+    (r) => r.model
+  )
 }
 
 /**
@@ -209,15 +216,21 @@ export interface ModelShare {
   quota: number
 }
 
-/** /api/data/self/ rows grouped by model, largest first, top `limit`. */
+/**
+ * /api/data/self/ rows grouped by model, largest first, top `limit`. Rows
+ * without a model name collapse into one blank entry, listed last.
+ */
 export function modelDistribution(rows: QuotaRow[], limit = 8): ModelShare[] {
   const totals = new Map<string, number>()
   for (const row of rows) {
-    const model = row.model_name || '--'
+    const model = normalizeModel(row.model_name)
     totals.set(model, (totals.get(model) ?? 0) + num(row.quota))
   }
-  return [...totals.entries()]
+  // The cut-off is by spend (blank included); only the display order puts
+  // the nameless row after every named model.
+  const top = [...totals.entries()]
     .map(([model, quota]) => ({ model, quota }))
     .sort((a, b) => b.quota - a.quota)
     .slice(0, limit)
+  return blankLast(top, (r) => r.model)
 }

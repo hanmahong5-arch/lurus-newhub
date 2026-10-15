@@ -37,6 +37,7 @@ import {
   type ModelEntry,
 } from '../lib/catalog';
 import { formatLatency } from '../lib/perf';
+import { CompareToggle } from './compare';
 import { SuccessRate } from './perf-badge';
 import { perfWindowLabelKey, usePerfWindow } from './perf-window';
 import {
@@ -259,6 +260,14 @@ function useModelColumns(): ColumnDef<ModelEntry>[] {
         meta: { label: t('Access') },
         enableSorting: false,
         cell: ({ row: { original: e } }) => <CallableBadge entry={e} />,
+      },
+      {
+        id: 'compare',
+        header: t('Compare'),
+        meta: { label: t('Compare') },
+        enableSorting: false,
+        enableHiding: false,
+        cell: ({ row: { original: e } }) => <CompareToggle id={e.id} />,
       },
     ],
     [t, fmt, unit, unitLabel, windowLabel],

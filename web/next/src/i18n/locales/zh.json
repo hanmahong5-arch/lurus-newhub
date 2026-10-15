@@ -71,5 +71,18 @@
   "Click to copy": "点击复制",
   "Copied: {{model}}": "已复制：{{model}}",
   "Select items...": "选择…",
-  "Show All": "显示全部"
+  "Show All": "显示全部",
+  "Chat": "对话",
+  "Setup Wizard": "接入向导",
+  "Pricing Versions": "定价版本",
+  "Model Performance": "模型性能",
+  "Cost Intelligence": "成本分析",
+  "System Tasks": "系统任务",
+  "Diagnostics": "诊断",
+  "OpenRouter Sync": "OpenRouter 同步",
+  "Platform Administration": "平台管理",
+  "Tenants": "租户",
+  "Authorization": "授权管理",
+  "Model Rate Limits": "模型限流",
+  "Model Pools": "模型池"
 }

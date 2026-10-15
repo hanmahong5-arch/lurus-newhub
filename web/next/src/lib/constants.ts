@@ -8,8 +8,6 @@
  */
 export const APP_BASEPATH = '/'
 
-/** Where the legacy (Semi UI) console lives. */
-export const LEGACY_CONSOLE_URL = '/console/v2/dashboard'
 
 export const BRAND_NAME = 'Lurus'
 export const PRODUCT_NAME = 'newhub'

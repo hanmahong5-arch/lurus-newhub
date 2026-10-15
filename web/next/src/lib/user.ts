@@ -44,6 +44,11 @@ export interface UserAccess {
   isPayer: boolean
   /** Our own people. Backend isPlatformStaff: integer role >= RoleAdminUser (10). */
   isPlatformStaff: boolean
+  /**
+   * Platform root: integer role >= RoleRootUser (100). The /api/v2/admin
+   * group (RootJWTAuth) and the v1 option/root routes accept nobody else.
+   */
+  isPlatformRoot: boolean
   /** Platform staff, or tenant_role = admin (backend requireTenantAdmin). */
   isTenantAdmin: boolean
   isDeptLead: boolean
@@ -61,6 +66,7 @@ export function userAccess(
     tenantRole,
     isPayer: user?.is_payer === true,
     isPlatformStaff,
+    isPlatformRoot: hasMinRole(user?.role, ROLE.root),
     isTenantAdmin: isPlatformStaff || tenantRole === 'admin',
     isDeptLead: tenantRole === 'dept_lead',
   }

@@ -5,7 +5,7 @@ import { AdminModelLimitsPage } from '@/features/admin-model-limits'
 
 function Guarded() {
   return (
-    <RequireAccess requires='platformStaff'>
+    <RequireAccess requires='platformRoot'>
       <AdminModelLimitsPage />
     </RequireAccess>
   )

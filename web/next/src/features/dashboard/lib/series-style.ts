@@ -21,12 +21,14 @@ import { useTranslation } from 'react-i18next'
 import type { ChartConfig } from '@/components/ui/chart'
 import { getChartColor } from '@/lib/colors'
 
+import { useModelLabel } from './model-name'
 import { OTHER_KEY, type SeriesDef } from './series'
 
-/** Display name of a series: the model, or the localized "Other". */
+/** Display name of a series: the model, "Unknown model", or "Other". */
 export function useSeriesName() {
   const { t } = useTranslation()
-  return (s: SeriesDef) => s.model ?? t('Other')
+  const label = useModelLabel()
+  return (s: SeriesDef) => (s.model === null ? t('Other') : label(s.model))
 }
 
 export function seriesColor(series: SeriesDef[], key: string): string {

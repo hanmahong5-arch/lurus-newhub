@@ -60,6 +60,7 @@ import {
   TREND_DAYS,
   type DailyPoint,
 } from '../lib/kpis'
+import { isBlankModel, useModelLabel } from '../lib/model-name'
 import { formatRemaining, type LoadState } from '../lib/state'
 import type { RealtimeLogs, TrendData } from '../lib/types'
 
@@ -449,7 +450,8 @@ export function DistributionPanel(props: DistributionPanelProps) {
   const { t } = useTranslation()
   const { state, data, money } = props
   const rows = data ? modelDistribution(data.rows) : []
-  const max = rows[0]?.quota || 1
+  const max = Math.max(1, ...rows.map((r) => r.quota))
+  const modelLabel = useModelLabel()
   return (
     <Panel
       testId='dashboard-distribution'
@@ -477,7 +479,14 @@ export function DistributionPanel(props: DistributionPanelProps) {
           {rows.map((r) => (
             <li key={r.model} data-testid='distribution-row'>
               <div className='mb-1 flex justify-between gap-2 text-xs'>
-                <span className='truncate font-mono'>{r.model}</span>
+                <span
+                  className={cn(
+                    'truncate',
+                    isBlankModel(r.model) ? 'text-muted-foreground' : 'font-mono'
+                  )}
+                >
+                  {modelLabel(r.model)}
+                </span>
                 <span className='text-muted-foreground tabular-nums'>
                   {formatQuota(r.quota, money)}
                 </span>
@@ -508,6 +517,7 @@ export function RecentCostPanel(props: RecentCostPanelProps) {
   const { t } = useTranslation()
   const { state, data, money } = props
   const rows = data ? costByModel(data.logs).slice(0, 6) : []
+  const modelLabel = useModelLabel()
   return (
     <Panel
       testId='dashboard-recent-cost'
@@ -534,7 +544,14 @@ export function RecentCostPanel(props: RecentCostPanelProps) {
         <ul className='flex flex-col gap-2 text-sm'>
           {rows.map((r) => (
             <li key={r.model} className='flex justify-between gap-2'>
-              <span className='truncate font-mono'>{r.model}</span>
+              <span
+                className={cn(
+                  'truncate',
+                  isBlankModel(r.model) ? 'text-muted-foreground' : 'font-mono'
+                )}
+              >
+                {modelLabel(r.model)}
+              </span>
               <span className='text-muted-foreground tabular-nums'>
                 {formatQuota(r.totalQuota, money, 4)} ·{' '}
                 {t('{{n}} req', { n: r.requestCount })}

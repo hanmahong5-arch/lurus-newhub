@@ -5,7 +5,7 @@ import { AdminModelPerformancePage } from '@/features/admin-model-performance'
 
 function Guarded() {
   return (
-    <RequireAccess requires='platformStaff'>
+    <RequireAccess requires='platformRoot'>
       <AdminModelPerformancePage />
     </RequireAccess>
   )

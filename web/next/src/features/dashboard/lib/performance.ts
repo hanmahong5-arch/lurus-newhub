@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { blankLast } from './model-name'
 import type { PerformanceRow } from './types'
 
 /** Volume fields exist for tenant admins only. */
@@ -25,10 +26,14 @@ export function hasVolume(rows: PerformanceRow[]): boolean {
 
 export function sortPerformance(rows: PerformanceRow[]): PerformanceRow[] {
   const volume = hasVolume(rows)
-  return [...rows].sort((a, b) =>
-    volume
-      ? (b.requests ?? 0) - (a.requests ?? 0) ||
-        a.model_name.localeCompare(b.model_name)
-      : a.model_name.localeCompare(b.model_name)
+  // A row with no model name is never ranked against real models: it is last.
+  return blankLast(
+    [...rows].sort((a, b) =>
+      volume
+        ? (b.requests ?? 0) - (a.requests ?? 0) ||
+          a.model_name.localeCompare(b.model_name)
+        : a.model_name.localeCompare(b.model_name)
+    ),
+    (r) => r.model_name
   )
 }

@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { ExternalLink, Laptop, Moon, Sun } from 'lucide-react'
+import { Laptop, Moon, Sun } from 'lucide-react'
 import { useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -37,12 +37,11 @@ import { useSearch } from '@/context/search-provider'
 import { useTheme } from '@/context/theme-provider'
 import { currentUserQueryOptions, userAccess } from '@/lib/user'
 
-import { visibleClassicGroup } from './layout/classic-nav'
 import { visibleNavGroups } from './layout/nav'
 
 /**
  * Ctrl/Cmd+K command palette. It lists exactly what the sidebar lists for the
- * caller (access gating included), the classic-console links, and the theme
+ * caller (access gating included) and the theme
  * actions.
  */
 export function CommandMenu() {
@@ -53,7 +52,6 @@ export function CommandMenu() {
   const { data: user } = useQuery(currentUserQueryOptions)
 
   const navGroups = useMemo(() => visibleNavGroups(userAccess(user)), [user])
-  const classicGroup = useMemo(() => visibleClassicGroup(user), [user])
 
   const runCommand = useCallback(
     (command: () => unknown) => {
@@ -92,23 +90,6 @@ export function CommandMenu() {
                 ))}
               </CommandGroup>
             ))}
-            {classicGroup != null && (
-              <CommandGroup heading={t(classicGroup.label)}>
-                {classicGroup.items.map((item) => (
-                  <CommandItem
-                    key={item.id}
-                    value={`${t(classicGroup.label)} ${t(item.label)} ${item.href}`}
-                    onSelect={() =>
-                      runCommand(() => window.location.assign(item.href))
-                    }
-                  >
-                    <item.icon className='text-muted-foreground size-4' />
-                    {t(item.label)}
-                    <ExternalLink className='text-muted-foreground ms-auto size-3' />
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            )}
             <CommandSeparator />
             <CommandGroup heading={t('Theme')}>
               <CommandItem onSelect={() => runCommand(() => setTheme('light'))}>

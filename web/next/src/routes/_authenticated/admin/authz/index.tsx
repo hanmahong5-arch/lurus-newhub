@@ -5,7 +5,7 @@ import { AdminAuthzPage } from '@/features/admin-authz'
 
 function Guarded() {
   return (
-    <RequireAccess requires='platformStaff'>
+    <RequireAccess requires='platformRoot'>
       <AdminAuthzPage />
     </RequireAccess>
   )

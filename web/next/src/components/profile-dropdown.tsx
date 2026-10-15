@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { LogOut, MonitorCog, ShieldCheck, Wallet } from 'lucide-react'
+import { LogOut, ShieldCheck, Wallet } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -34,7 +34,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
-import { LEGACY_CONSOLE_URL } from '@/lib/constants'
 import { getRoleLabel } from '@/lib/roles'
 import { signOut } from '@/lib/session'
 import { currentUserQueryOptions } from '@/lib/user'
@@ -126,10 +125,6 @@ export function ProfileDropdown() {
           <DropdownMenuItem onClick={() => void navigate({ to: '/wallet' })}>
             <Wallet className='size-4' />
             {t('Wallet')}
-          </DropdownMenuItem>
-          <DropdownMenuItem render={<a href={LEGACY_CONSOLE_URL} />}>
-            <MonitorCog className='size-4' />
-            {t('Back to the previous console')}
           </DropdownMenuItem>
 
           <DropdownMenuSeparator />
