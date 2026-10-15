@@ -29,8 +29,10 @@ ed0b260cd7604fe746f36cb2bd6bd37973dad47e:internal/app/relay/relay_coverage_gap_t
 019ceb4dc5f5441bb7b922389a10b3bd05347fb8:web/next/src/features/playground/lib/streaming/payload-builder.ts:curl-auth-header:90
 
 # Not a secret: a PR-range commit of the console parity port (PR #256) had
-# sortKey='p50_latency_ms' / sortKey='p95_latency_ms' column props, which
-# generic-api-key reads as a key. The file now passes field=, so the squashed
+# p50/p95 latency column headers whose sort prop was spelled like a key
+# assignment, which generic-api-key reads as a key. The file now passes
+# field=, so the squashed
 # commit on main is clean; these pin only that PR-range commit.
 fceace79294c12d2326e84ead6e9933c68bed5e8:web/next/src/features/admin-model-performance/index.tsx:generic-api-key:231
 fceace79294c12d2326e84ead6e9933c68bed5e8:web/next/src/features/admin-model-performance/index.tsx:generic-api-key:232
+7ccce3acb767caaa6857058e1a30140852d65797:.gitleaksignore:generic-api-key:32
