@@ -223,8 +223,7 @@ func loadConsoleSources(t *testing.T) map[string]string {
 func blankComments(src string) string {
 	b := []byte(src)
 	var code func(i int, inInterp bool) int
-	var tmpl func(i int) int
-	tmpl = func(i int) int {
+	tmpl := func(i int) int {
 		for i < len(b) {
 			switch {
 			case b[i] == '\\':
@@ -262,7 +261,7 @@ func blankComments(src string) string {
 					i++
 				}
 			case c == '/' && i+1 < len(b) && b[i+1] == '*':
-				for i < len(b) && !(b[i] == '*' && i+1 < len(b) && b[i+1] == '/') {
+				for i < len(b) && (b[i] != '*' || i+1 >= len(b) || b[i+1] != '/') {
 					if b[i] != '\n' {
 						b[i] = ' '
 					}
