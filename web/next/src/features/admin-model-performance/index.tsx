@@ -116,21 +116,22 @@ function ariaSort(
 }
 
 function SortHead(props: {
-  sortKey: SortKey
+  /** The column this header sorts by. */
+  field: SortKey
   label: string
   active: SortKey
   dir: SortDir
   onSort: (key: SortKey) => void
 }) {
-  const on = props.active === props.sortKey
+  const on = props.active === props.field
   const Icon = props.dir === 'desc' ? ArrowDown : ArrowUp
   return (
     <TableHead className={NUM} aria-sort={ariaSort(on, props.dir)}>
       <button
         type='button'
-        data-testid={`perf-sort-${props.sortKey}`}
+        data-testid={`perf-sort-${props.field}`}
         className='hover:text-foreground inline-flex items-center gap-1'
-        onClick={() => props.onSort(props.sortKey)}
+        onClick={() => props.onSort(props.field)}
       >
         {props.label}
         {on && <Icon className='size-3' aria-hidden='true' />}
@@ -219,17 +220,17 @@ function ModelTable(props: {
             <TableHeader>
               <TableRow>
                 <TableHead>{t('Model')}</TableHead>
-                <SortHead sortKey='requests' label={t('Requests')} {...head} />
+                <SortHead field='requests' label={t('Requests')} {...head} />
                 <SortHead
-                  sortKey='error_rate'
+                  field='error_rate'
                   label={t('Error rate')}
                   {...head}
                 />
                 <TableHead className={NUM}>{t('Tokens (in / out)')}</TableHead>
                 <TableHead className={NUM}>{t('Spend')}</TableHead>
-                <SortHead sortKey='avg_latency_ms' label={t('Avg')} {...head} />
-                <SortHead sortKey='p50_latency_ms' label='p50' {...head} />
-                <SortHead sortKey='p95_latency_ms' label='p95' {...head} />
+                <SortHead field='avg_latency_ms' label={t('Avg')} {...head} />
+                <SortHead field='p50_latency_ms' label='p50' {...head} />
+                <SortHead field='p95_latency_ms' label='p95' {...head} />
               </TableRow>
             </TableHeader>
             <TableBody className='[&>tr]:h-12'>
