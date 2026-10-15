@@ -175,6 +175,8 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"GET /api/v2/admin/tenants/:id/model-allowlist":             "RootJWTAuth-gated (requireModelLimitTenant only 404s on a nonexistent tenant id): root manages every tenant's model allow-list by design",
 		"PUT /api/v2/admin/tenants/:id/model-allowlist":             "RootJWTAuth-gated: root manages every tenant's model allow-list by design; the sole writer of the tenant_configs models.allowlist row",
 		"DELETE /api/v2/admin/tenants/:id/model-allowlist":          "RootJWTAuth-gated: root manages every tenant's model allow-list by design",
+		"PUT /api/v2/admin/tenants/:id/switch-teampack":             "RootJWTAuth-gated: root publishes a reseller's signed team pack by design; :id is resolved to a tenant row (id, then slug; \"default\" refused) and the pack is keyed on that tenant's id, so there is no caller-supplied foreign resource id to cross-check",
+		"DELETE /api/v2/admin/tenants/:id/switch-teampack":          "RootJWTAuth-gated: root withdraws a reseller's team pack by design; idempotent, keyed on the resolved tenant id only",
 		"POST /api/v2/admin/tenants/:id/credit-pool":                "RootJWTAuth-gated: root manages every tenant's credit pool by design (ADR 2026-05-18 §4.1)",
 		"GET /api/v2/admin/tenants/:id/credit-pool":                 "RootJWTAuth-gated: root manages every tenant's credit pool by design",
 		"POST /api/v2/admin/tenants/:id/credit-pool/topup":          "RootJWTAuth-gated: root manages every tenant's credit pool by design",

@@ -564,6 +564,8 @@ func migrateDB() error {
 		&ContentRule{},
 		&ChannelOverrideTemplate{},
 		&ChannelTemplateApplication{},
+		// Reseller team-asset bundle store (migration 055) - dual-creation like 040.
+		&entity.SwitchTeamPack{},
 	)
 	if err != nil {
 		return err
