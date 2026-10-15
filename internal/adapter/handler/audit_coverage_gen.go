@@ -59,6 +59,9 @@ var AuditExplicitRoutes = map[string]bool{
 	// tenant_model_allowlist.go
 	"PUT /api/v2/admin/tenants/:id/model-allowlist":    true,
 	"DELETE /api/v2/admin/tenants/:id/model-allowlist": true,
+	// switch_teampack.go
+	"PUT /api/v2/admin/tenants/:id/switch-teampack":    true,
+	"DELETE /api/v2/admin/tenants/:id/switch-teampack": true,
 	// tenant_credit_pool.go — money routes, explicit as of this lane
 	"POST /api/v2/admin/tenants/:id/credit-pool":       true,
 	"POST /api/v2/admin/tenants/:id/credit-pool/topup": true,

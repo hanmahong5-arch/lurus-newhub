@@ -50,7 +50,9 @@ func SetApiV2Router(router *gin.Engine) {
 	//   GET /api/v2/admin/logs/export         (:560)
 	//   GET /api/v2/admin/audit/export        (:617)
 	// One anchored regex covers all three: "admin" also matches [^/]+ in the
-	// first alternative.
+	// first alternative. The second regex keeps the Switch team-pack blob and
+	// its .sig sidecar out of gzip: the blob is already a gzip archive, and the
+	// client checks the signature over the exact bytes it receives.
 	//
 	// NOTE for whoever edits this: in gin-contrib/gzip v0.0.6 newGzipHandler
 	// sets `Options: DefaultOptions` — a PACKAGE-LEVEL pointer — and then
@@ -63,7 +65,7 @@ func SetApiV2Router(router *gin.Engine) {
 	// while WithExcludedPathsRegexs uses MatchString, hence the ^...$ anchors.
 	apiV2.Use(gzip.Gzip(
 		gzip.DefaultCompression,
-		gzip.WithExcludedPathsRegexs([]string{`^/api/v2/(?:[^/]+/logs|admin/audit)/export$`}),
+		gzip.WithExcludedPathsRegexs([]string{`^/api/v2/(?:[^/]+/logs|admin/audit)/export$`, `^/api/v2/[^/]+/switch/teampack(?:\.sig)?$`}),
 	))
 	{
 		// ================================================================
@@ -527,6 +529,14 @@ func SetApiV2Router(router *gin.Engine) {
 		// which middleware.UserAuth (access-token based) would otherwise reject.
 		apiV2.POST("/:tenant_slug/user/heartbeat", handler.UserHeartbeat)
 
+		// Reseller team-asset bundle for white-label Switch clients (migration 055).
+		// Public, no auth: the pack is ed25519-signed (verified by the terminal, never
+		// by the Hub) and the format forbids secret values. Tenant resolved by slug in
+		// the handler; a missing/disabled tenant or unpublished pack is a plain 404.
+		apiV2.GET("/:tenant_slug/switch/teampack/meta", handler.GetSwitchTeamPackMeta)
+		apiV2.GET("/:tenant_slug/switch/teampack", handler.GetSwitchTeamPackBlob)
+		apiV2.GET("/:tenant_slug/switch/teampack.sig", handler.GetSwitchTeamPackSig)
+
 		apiV2.GET("/tools/download-manifest", handler.GetToolDownloadManifest)
 
 		// ================================================================
@@ -587,6 +597,11 @@ func SetApiV2Router(router *gin.Engine) {
 				tenantMgmt.GET("/:id/model-allowlist", handler.ListTenantModelAllowlist)
 				tenantMgmt.PUT("/:id/model-allowlist", handler.UpsertTenantModelAllowlist)
 				tenantMgmt.DELETE("/:id/model-allowlist", handler.DeleteTenantModelAllowlist)
+
+				// Reseller team-asset bundle (migration 055); public reads live on
+				// apiV2 as /:tenant_slug/switch/teampack{,.sig,/meta}.
+				tenantMgmt.PUT("/:id/switch-teampack", handler.PutSwitchTeamPack)
+				tenantMgmt.DELETE("/:id/switch-teampack", handler.DeleteSwitchTeamPack)
 
 				// Reseller credit-pool admin (ADR 2026-05-18 §4.1)
 				tenantMgmt.POST("/:id/credit-pool", handler.CreateCreditPool)

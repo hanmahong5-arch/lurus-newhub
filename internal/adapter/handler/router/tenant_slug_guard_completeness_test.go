@@ -60,11 +60,14 @@ func TestTenantSlugRoutesCarryTheGuard(t *testing.T) {
 	// login redirect, not at all). Each entry names the check that stands in
 	// for the guard — an entry without one is not a reason, it is a hole.
 	exempt := map[string]string{
-		"GET /api/v2/:tenant_slug/auth/login":      "pre-authentication OIDC redirect: there is no identity yet to compare the slug against; the handler resolves the slug only to build the IdP URL",
-		"GET /api/v2/:tenant_slug/credit-pool/me":  "OIDCAuth (JWT arm rejects a disabled tenant in mapOIDCUserToLurus, cookie arm runs repo.TenantGate) + GetCreditPoolForEndUser's own slug-vs-context comparison, 403 TENANT_MISMATCH",
-		"POST /api/v2/:tenant_slug/provision":      "entitlement-token auth: ProvisionV2 resolves the slug, runs repo.TenantGate on it, creates the bridged user in THAT tenant and refuses an account pinned elsewhere with 403 TENANT_MISMATCH",
-		"POST /api/v2/:tenant_slug/plan-grant":     "entitlement-token auth: PlanGrantV2 resolves the slug, runs repo.TenantGate on it and refuses an account pinned to another tenant with 403 TENANT_MISMATCH (same rule as ProvisionV2)",
-		"POST /api/v2/:tenant_slug/user/heartbeat": "raw relay-token auth: UserHeartbeat compares token.TenantId with the slug's tenant and then runs repo.TenantGate (403 TENANT_DISABLED)",
+		"GET /api/v2/:tenant_slug/auth/login":           "pre-authentication OIDC redirect: there is no identity yet to compare the slug against; the handler resolves the slug only to build the IdP URL",
+		"GET /api/v2/:tenant_slug/credit-pool/me":       "OIDCAuth (JWT arm rejects a disabled tenant in mapOIDCUserToLurus, cookie arm runs repo.TenantGate) + GetCreditPoolForEndUser's own slug-vs-context comparison, 403 TENANT_MISMATCH",
+		"POST /api/v2/:tenant_slug/provision":           "entitlement-token auth: ProvisionV2 resolves the slug, runs repo.TenantGate on it, creates the bridged user in THAT tenant and refuses an account pinned elsewhere with 403 TENANT_MISMATCH",
+		"POST /api/v2/:tenant_slug/plan-grant":          "entitlement-token auth: PlanGrantV2 resolves the slug, runs repo.TenantGate on it and refuses an account pinned to another tenant with 403 TENANT_MISMATCH (same rule as ProvisionV2)",
+		"POST /api/v2/:tenant_slug/user/heartbeat":      "raw relay-token auth: UserHeartbeat compares token.TenantId with the slug's tenant and then runs repo.TenantGate (403 TENANT_DISABLED)",
+		"GET /api/v2/:tenant_slug/switch/teampack/meta": "public signed-asset read, no identity to compare the slug against: the handler resolves the slug itself, serves only that tenant's pack, and answers 404 for an unknown or repo.TenantGate-closed tenant",
+		"GET /api/v2/:tenant_slug/switch/teampack":      "public signed-asset read, no identity to compare the slug against: the handler resolves the slug itself, serves only that tenant's pack, and answers 404 for an unknown or repo.TenantGate-closed tenant",
+		"GET /api/v2/:tenant_slug/switch/teampack.sig":  "public signed-asset read, no identity to compare the slug against: the handler resolves the slug itself, serves only that tenant's pack, and answers 404 for an unknown or repo.TenantGate-closed tenant",
 	}
 
 	const guardName = "TenantSlugGuard"

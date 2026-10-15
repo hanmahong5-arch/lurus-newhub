@@ -64,6 +64,7 @@ var registeredModels = []interface{}{
 	&entity.ResponseRegistry{},
 	&entity.ChatSession{}, &entity.ChatMessage{},
 	&entity.PlanQuotaGrant{},
+	&entity.SwitchTeamPack{},
 }
 
 // tenantColumnExempt maps a GORM-derived table name (not on
@@ -143,6 +144,11 @@ var tenantColumnExempt = map[string]string{
 		"the unique (tenant_id, grant_key) index is the only lookup; the " +
 		"delete keys off the primary key alone — no call site routes this " +
 		"table through WithTenantID/GetTenantDB",
+	"switch_teampacks": "Get/GetMeta/Upsert/DeleteSwitchTeamPack (switch_teampack.go) " +
+		"key on the tenant_id PRIMARY KEY alone with the bare DB handle; the " +
+		"handler resolves the tenant row first (admin by id-then-slug, public by " +
+		"slug) and passes its id explicitly — no call site routes this table " +
+		"through WithTenantID/GetTenantDB",
 }
 
 // TestTenantPlugin_AllowListCoversEveryRegisteredTenantColumn is the
