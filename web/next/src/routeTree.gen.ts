@@ -13,11 +13,20 @@ import { Route as R404RouteImport } from './routes/404'
 import { Route as R500RouteImport } from './routes/500'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as PublicRouteRouteImport } from './routes/_public/route'
+import { Route as authAccountDisabledRouteImport } from './routes/(auth)/account-disabled'
+import { Route as authBridgeLoginRouteImport } from './routes/(auth)/bridge-login'
+import { Route as authForbiddenRouteImport } from './routes/(auth)/forbidden'
+import { Route as authRegisterRouteImport } from './routes/(auth)/register'
+import { Route as authSetupRouteImport } from './routes/(auth)/setup'
 import { Route as PublicIndexRouteImport } from './routes/_public/index'
 import { Route as PublicAboutRouteImport } from './routes/_public/about'
 import { Route as PublicPrivacyPolicyRouteImport } from './routes/_public/privacy-policy'
 import { Route as PublicUserAgreementRouteImport } from './routes/_public/user-agreement'
+import { Route as authLoginIndexRouteImport } from './routes/(auth)/login/index'
+import { Route as authLoginTenantSlugRouteImport } from './routes/(auth)/login/$tenantSlug'
+import { Route as authOauthOidcRouteImport } from './routes/(auth)/oauth/oidc'
 import { Route as AuthenticatedAccountIndexRouteImport } from './routes/_authenticated/account/index'
+import { Route as AuthenticatedChatIndexRouteImport } from './routes/_authenticated/chat/index'
 import { Route as AuthenticatedDashboardIndexRouteImport } from './routes/_authenticated/dashboard/index'
 import { Route as AuthenticatedKeysIndexRouteImport } from './routes/_authenticated/keys/index'
 import { Route as AuthenticatedModelsIndexRouteImport } from './routes/_authenticated/models/index'
@@ -29,18 +38,29 @@ import { Route as AuthenticatedUsageLogsAuditRouteImport } from './routes/_authe
 import { Route as AuthenticatedWalletIndexRouteImport } from './routes/_authenticated/wallet/index'
 import { Route as PublicPricingIndexRouteImport } from './routes/_public/pricing/index'
 import { Route as PublicPricingModelIdRouteImport } from './routes/_public/pricing/$modelId'
+import { Route as AuthenticatedAdminAuthzIndexRouteImport } from './routes/_authenticated/admin/authz/index'
+import { Route as AuthenticatedAdminCostIntelligenceIndexRouteImport } from './routes/_authenticated/admin/cost-intelligence/index'
+import { Route as AuthenticatedAdminDiagnosticsIndexRouteImport } from './routes/_authenticated/admin/diagnostics/index'
+import { Route as AuthenticatedAdminModelLimitsIndexRouteImport } from './routes/_authenticated/admin/model-limits/index'
+import { Route as AuthenticatedAdminModelPerformanceIndexRouteImport } from './routes/_authenticated/admin/model-performance/index'
+import { Route as AuthenticatedAdminModelPoolsIndexRouteImport } from './routes/_authenticated/admin/model-pools/index'
+import { Route as AuthenticatedAdminOpenrouterSyncIndexRouteImport } from './routes/_authenticated/admin/openrouter-sync/index'
 import { Route as AuthenticatedAdminRedemptionCodesIndexRouteImport } from './routes/_authenticated/admin/redemption-codes/index'
 import { Route as AuthenticatedAdminSettingsIndexRouteImport } from './routes/_authenticated/admin/settings/index'
 import { Route as AuthenticatedAdminSettingsSectionRouteImport } from './routes/_authenticated/admin/settings/$section'
+import { Route as AuthenticatedAdminSystemTasksIndexRouteImport } from './routes/_authenticated/admin/system-tasks/index'
+import { Route as AuthenticatedAdminTenantsIndexRouteImport } from './routes/_authenticated/admin/tenants/index'
 import { Route as AuthenticatedAdminUsersIndexRouteImport } from './routes/_authenticated/admin/users/index'
 import { Route as AuthenticatedOpsChannelsIndexRouteImport } from './routes/_authenticated/ops/channels/index'
 import { Route as AuthenticatedOpsOverviewIndexRouteImport } from './routes/_authenticated/ops/overview/index'
 import { Route as AuthenticatedOpsRulesIndexRouteImport } from './routes/_authenticated/ops/rules/index'
 import { Route as AuthenticatedOrgBillingIndexRouteImport } from './routes/_authenticated/org/billing/index'
 import { Route as AuthenticatedOrgDepartmentsIndexRouteImport } from './routes/_authenticated/org/departments/index'
+import { Route as AuthenticatedOrgFlowsIndexRouteImport } from './routes/_authenticated/org/flows/index'
 import { Route as AuthenticatedOrgKeysBatchIndexRouteImport } from './routes/_authenticated/org/keys-batch/index'
 import { Route as AuthenticatedOrgMembersIndexRouteImport } from './routes/_authenticated/org/members/index'
 import { Route as AuthenticatedOrgPolicyIndexRouteImport } from './routes/_authenticated/org/policy/index'
+import { Route as AuthenticatedOrgPricingIndexRouteImport } from './routes/_authenticated/org/pricing/index'
 
 const R404Route = R404RouteImport.update({
   id: '/404',
@@ -58,6 +78,31 @@ const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
 } as any)
 const PublicRouteRoute = PublicRouteRouteImport.update({
   id: '/_public',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const authAccountDisabledRoute = authAccountDisabledRouteImport.update({
+  id: '/(auth)/account-disabled',
+  path: '/account-disabled',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const authBridgeLoginRoute = authBridgeLoginRouteImport.update({
+  id: '/(auth)/bridge-login',
+  path: '/bridge-login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const authForbiddenRoute = authForbiddenRouteImport.update({
+  id: '/(auth)/forbidden',
+  path: '/forbidden',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const authRegisterRoute = authRegisterRouteImport.update({
+  id: '/(auth)/register',
+  path: '/register',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const authSetupRoute = authSetupRouteImport.update({
+  id: '/(auth)/setup',
+  path: '/setup',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PublicIndexRoute = PublicIndexRouteImport.update({
@@ -80,12 +125,32 @@ const PublicUserAgreementRoute = PublicUserAgreementRouteImport.update({
   path: '/user-agreement',
   getParentRoute: () => PublicRouteRoute,
 } as any)
+const authLoginIndexRoute = authLoginIndexRouteImport.update({
+  id: '/(auth)/login/',
+  path: '/login/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const authLoginTenantSlugRoute = authLoginTenantSlugRouteImport.update({
+  id: '/(auth)/login/$tenantSlug',
+  path: '/login/$tenantSlug',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const authOauthOidcRoute = authOauthOidcRouteImport.update({
+  id: '/(auth)/oauth/oidc',
+  path: '/oauth/oidc',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthenticatedAccountIndexRoute =
   AuthenticatedAccountIndexRouteImport.update({
     id: '/account/',
     path: '/account/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedChatIndexRoute = AuthenticatedChatIndexRouteImport.update({
+  id: '/chat/',
+  path: '/chat/',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 const AuthenticatedDashboardIndexRoute =
   AuthenticatedDashboardIndexRouteImport.update({
     id: '/dashboard/',
@@ -148,6 +213,48 @@ const PublicPricingModelIdRoute = PublicPricingModelIdRouteImport.update({
   path: '/pricing/$modelId',
   getParentRoute: () => PublicRouteRoute,
 } as any)
+const AuthenticatedAdminAuthzIndexRoute =
+  AuthenticatedAdminAuthzIndexRouteImport.update({
+    id: '/admin/authz/',
+    path: '/admin/authz/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedAdminCostIntelligenceIndexRoute =
+  AuthenticatedAdminCostIntelligenceIndexRouteImport.update({
+    id: '/admin/cost-intelligence/',
+    path: '/admin/cost-intelligence/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedAdminDiagnosticsIndexRoute =
+  AuthenticatedAdminDiagnosticsIndexRouteImport.update({
+    id: '/admin/diagnostics/',
+    path: '/admin/diagnostics/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedAdminModelLimitsIndexRoute =
+  AuthenticatedAdminModelLimitsIndexRouteImport.update({
+    id: '/admin/model-limits/',
+    path: '/admin/model-limits/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedAdminModelPerformanceIndexRoute =
+  AuthenticatedAdminModelPerformanceIndexRouteImport.update({
+    id: '/admin/model-performance/',
+    path: '/admin/model-performance/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedAdminModelPoolsIndexRoute =
+  AuthenticatedAdminModelPoolsIndexRouteImport.update({
+    id: '/admin/model-pools/',
+    path: '/admin/model-pools/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedAdminOpenrouterSyncIndexRoute =
+  AuthenticatedAdminOpenrouterSyncIndexRouteImport.update({
+    id: '/admin/openrouter-sync/',
+    path: '/admin/openrouter-sync/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedAdminRedemptionCodesIndexRoute =
   AuthenticatedAdminRedemptionCodesIndexRouteImport.update({
     id: '/admin/redemption-codes/',
@@ -164,6 +271,18 @@ const AuthenticatedAdminSettingsSectionRoute =
   AuthenticatedAdminSettingsSectionRouteImport.update({
     id: '/admin/settings/$section',
     path: '/admin/settings/$section',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedAdminSystemTasksIndexRoute =
+  AuthenticatedAdminSystemTasksIndexRouteImport.update({
+    id: '/admin/system-tasks/',
+    path: '/admin/system-tasks/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedAdminTenantsIndexRoute =
+  AuthenticatedAdminTenantsIndexRouteImport.update({
+    id: '/admin/tenants/',
+    path: '/admin/tenants/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
 const AuthenticatedAdminUsersIndexRoute =
@@ -202,6 +321,12 @@ const AuthenticatedOrgDepartmentsIndexRoute =
     path: '/org/departments/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedOrgFlowsIndexRoute =
+  AuthenticatedOrgFlowsIndexRouteImport.update({
+    id: '/org/flows/',
+    path: '/org/flows/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedOrgKeysBatchIndexRoute =
   AuthenticatedOrgKeysBatchIndexRouteImport.update({
     id: '/org/keys-batch/',
@@ -220,17 +345,32 @@ const AuthenticatedOrgPolicyIndexRoute =
     path: '/org/policy/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedOrgPricingIndexRoute =
+  AuthenticatedOrgPricingIndexRouteImport.update({
+    id: '/org/pricing/',
+    path: '/org/pricing/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof PublicIndexRoute
   '/404': typeof R404Route
   '/500': typeof R500Route
+  '/account-disabled': typeof authAccountDisabledRoute
+  '/bridge-login': typeof authBridgeLoginRoute
+  '/forbidden': typeof authForbiddenRoute
+  '/register': typeof authRegisterRoute
+  '/setup': typeof authSetupRoute
   '/about': typeof PublicAboutRoute
   '/privacy-policy': typeof PublicPrivacyPolicyRoute
   '/user-agreement': typeof PublicUserAgreementRoute
+  '/login/$tenantSlug': typeof authLoginTenantSlugRoute
+  '/oauth/oidc': typeof authOauthOidcRoute
   '/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
   '/pricing/$modelId': typeof PublicPricingModelIdRoute
+  '/login/': typeof authLoginIndexRoute
   '/account/': typeof AuthenticatedAccountIndexRoute
+  '/chat/': typeof AuthenticatedChatIndexRoute
   '/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/keys/': typeof AuthenticatedKeysIndexRoute
   '/models/': typeof AuthenticatedModelsIndexRoute
@@ -241,28 +381,48 @@ export interface FileRoutesByFullPath {
   '/wallet/': typeof AuthenticatedWalletIndexRoute
   '/pricing/': typeof PublicPricingIndexRoute
   '/admin/settings/$section': typeof AuthenticatedAdminSettingsSectionRoute
+  '/admin/authz/': typeof AuthenticatedAdminAuthzIndexRoute
+  '/admin/cost-intelligence/': typeof AuthenticatedAdminCostIntelligenceIndexRoute
+  '/admin/diagnostics/': typeof AuthenticatedAdminDiagnosticsIndexRoute
+  '/admin/model-limits/': typeof AuthenticatedAdminModelLimitsIndexRoute
+  '/admin/model-performance/': typeof AuthenticatedAdminModelPerformanceIndexRoute
+  '/admin/model-pools/': typeof AuthenticatedAdminModelPoolsIndexRoute
+  '/admin/openrouter-sync/': typeof AuthenticatedAdminOpenrouterSyncIndexRoute
   '/admin/redemption-codes/': typeof AuthenticatedAdminRedemptionCodesIndexRoute
   '/admin/settings/': typeof AuthenticatedAdminSettingsIndexRoute
+  '/admin/system-tasks/': typeof AuthenticatedAdminSystemTasksIndexRoute
+  '/admin/tenants/': typeof AuthenticatedAdminTenantsIndexRoute
   '/admin/users/': typeof AuthenticatedAdminUsersIndexRoute
   '/ops/channels/': typeof AuthenticatedOpsChannelsIndexRoute
   '/ops/overview/': typeof AuthenticatedOpsOverviewIndexRoute
   '/ops/rules/': typeof AuthenticatedOpsRulesIndexRoute
   '/org/billing/': typeof AuthenticatedOrgBillingIndexRoute
   '/org/departments/': typeof AuthenticatedOrgDepartmentsIndexRoute
+  '/org/flows/': typeof AuthenticatedOrgFlowsIndexRoute
   '/org/keys-batch/': typeof AuthenticatedOrgKeysBatchIndexRoute
   '/org/members/': typeof AuthenticatedOrgMembersIndexRoute
   '/org/policy/': typeof AuthenticatedOrgPolicyIndexRoute
+  '/org/pricing/': typeof AuthenticatedOrgPricingIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof PublicIndexRoute
   '/404': typeof R404Route
   '/500': typeof R500Route
+  '/account-disabled': typeof authAccountDisabledRoute
+  '/bridge-login': typeof authBridgeLoginRoute
+  '/forbidden': typeof authForbiddenRoute
+  '/register': typeof authRegisterRoute
+  '/setup': typeof authSetupRoute
   '/about': typeof PublicAboutRoute
   '/privacy-policy': typeof PublicPrivacyPolicyRoute
   '/user-agreement': typeof PublicUserAgreementRoute
+  '/login/$tenantSlug': typeof authLoginTenantSlugRoute
+  '/oauth/oidc': typeof authOauthOidcRoute
   '/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
   '/pricing/$modelId': typeof PublicPricingModelIdRoute
+  '/login': typeof authLoginIndexRoute
   '/account': typeof AuthenticatedAccountIndexRoute
+  '/chat': typeof AuthenticatedChatIndexRoute
   '/dashboard': typeof AuthenticatedDashboardIndexRoute
   '/keys': typeof AuthenticatedKeysIndexRoute
   '/models': typeof AuthenticatedModelsIndexRoute
@@ -273,17 +433,28 @@ export interface FileRoutesByTo {
   '/wallet': typeof AuthenticatedWalletIndexRoute
   '/pricing': typeof PublicPricingIndexRoute
   '/admin/settings/$section': typeof AuthenticatedAdminSettingsSectionRoute
+  '/admin/authz': typeof AuthenticatedAdminAuthzIndexRoute
+  '/admin/cost-intelligence': typeof AuthenticatedAdminCostIntelligenceIndexRoute
+  '/admin/diagnostics': typeof AuthenticatedAdminDiagnosticsIndexRoute
+  '/admin/model-limits': typeof AuthenticatedAdminModelLimitsIndexRoute
+  '/admin/model-performance': typeof AuthenticatedAdminModelPerformanceIndexRoute
+  '/admin/model-pools': typeof AuthenticatedAdminModelPoolsIndexRoute
+  '/admin/openrouter-sync': typeof AuthenticatedAdminOpenrouterSyncIndexRoute
   '/admin/redemption-codes': typeof AuthenticatedAdminRedemptionCodesIndexRoute
   '/admin/settings': typeof AuthenticatedAdminSettingsIndexRoute
+  '/admin/system-tasks': typeof AuthenticatedAdminSystemTasksIndexRoute
+  '/admin/tenants': typeof AuthenticatedAdminTenantsIndexRoute
   '/admin/users': typeof AuthenticatedAdminUsersIndexRoute
   '/ops/channels': typeof AuthenticatedOpsChannelsIndexRoute
   '/ops/overview': typeof AuthenticatedOpsOverviewIndexRoute
   '/ops/rules': typeof AuthenticatedOpsRulesIndexRoute
   '/org/billing': typeof AuthenticatedOrgBillingIndexRoute
   '/org/departments': typeof AuthenticatedOrgDepartmentsIndexRoute
+  '/org/flows': typeof AuthenticatedOrgFlowsIndexRoute
   '/org/keys-batch': typeof AuthenticatedOrgKeysBatchIndexRoute
   '/org/members': typeof AuthenticatedOrgMembersIndexRoute
   '/org/policy': typeof AuthenticatedOrgPolicyIndexRoute
+  '/org/pricing': typeof AuthenticatedOrgPricingIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -291,13 +462,22 @@ export interface FileRoutesById {
   '/_public': typeof PublicRouteRouteWithChildren
   '/404': typeof R404Route
   '/500': typeof R500Route
+  '/(auth)/account-disabled': typeof authAccountDisabledRoute
+  '/(auth)/bridge-login': typeof authBridgeLoginRoute
+  '/(auth)/forbidden': typeof authForbiddenRoute
+  '/(auth)/register': typeof authRegisterRoute
+  '/(auth)/setup': typeof authSetupRoute
   '/_public/about': typeof PublicAboutRoute
   '/_public/privacy-policy': typeof PublicPrivacyPolicyRoute
   '/_public/user-agreement': typeof PublicUserAgreementRoute
   '/_public/': typeof PublicIndexRoute
+  '/(auth)/login/$tenantSlug': typeof authLoginTenantSlugRoute
+  '/(auth)/oauth/oidc': typeof authOauthOidcRoute
   '/_authenticated/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
   '/_public/pricing/$modelId': typeof PublicPricingModelIdRoute
+  '/(auth)/login/': typeof authLoginIndexRoute
   '/_authenticated/account/': typeof AuthenticatedAccountIndexRoute
+  '/_authenticated/chat/': typeof AuthenticatedChatIndexRoute
   '/_authenticated/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/_authenticated/keys/': typeof AuthenticatedKeysIndexRoute
   '/_authenticated/models/': typeof AuthenticatedModelsIndexRoute
@@ -308,17 +488,28 @@ export interface FileRoutesById {
   '/_authenticated/wallet/': typeof AuthenticatedWalletIndexRoute
   '/_public/pricing/': typeof PublicPricingIndexRoute
   '/_authenticated/admin/settings/$section': typeof AuthenticatedAdminSettingsSectionRoute
+  '/_authenticated/admin/authz/': typeof AuthenticatedAdminAuthzIndexRoute
+  '/_authenticated/admin/cost-intelligence/': typeof AuthenticatedAdminCostIntelligenceIndexRoute
+  '/_authenticated/admin/diagnostics/': typeof AuthenticatedAdminDiagnosticsIndexRoute
+  '/_authenticated/admin/model-limits/': typeof AuthenticatedAdminModelLimitsIndexRoute
+  '/_authenticated/admin/model-performance/': typeof AuthenticatedAdminModelPerformanceIndexRoute
+  '/_authenticated/admin/model-pools/': typeof AuthenticatedAdminModelPoolsIndexRoute
+  '/_authenticated/admin/openrouter-sync/': typeof AuthenticatedAdminOpenrouterSyncIndexRoute
   '/_authenticated/admin/redemption-codes/': typeof AuthenticatedAdminRedemptionCodesIndexRoute
   '/_authenticated/admin/settings/': typeof AuthenticatedAdminSettingsIndexRoute
+  '/_authenticated/admin/system-tasks/': typeof AuthenticatedAdminSystemTasksIndexRoute
+  '/_authenticated/admin/tenants/': typeof AuthenticatedAdminTenantsIndexRoute
   '/_authenticated/admin/users/': typeof AuthenticatedAdminUsersIndexRoute
   '/_authenticated/ops/channels/': typeof AuthenticatedOpsChannelsIndexRoute
   '/_authenticated/ops/overview/': typeof AuthenticatedOpsOverviewIndexRoute
   '/_authenticated/ops/rules/': typeof AuthenticatedOpsRulesIndexRoute
   '/_authenticated/org/billing/': typeof AuthenticatedOrgBillingIndexRoute
   '/_authenticated/org/departments/': typeof AuthenticatedOrgDepartmentsIndexRoute
+  '/_authenticated/org/flows/': typeof AuthenticatedOrgFlowsIndexRoute
   '/_authenticated/org/keys-batch/': typeof AuthenticatedOrgKeysBatchIndexRoute
   '/_authenticated/org/members/': typeof AuthenticatedOrgMembersIndexRoute
   '/_authenticated/org/policy/': typeof AuthenticatedOrgPolicyIndexRoute
+  '/_authenticated/org/pricing/': typeof AuthenticatedOrgPricingIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -326,12 +517,21 @@ export interface FileRouteTypes {
     | '/'
     | '/404'
     | '/500'
+    | '/account-disabled'
+    | '/bridge-login'
+    | '/forbidden'
+    | '/register'
+    | '/setup'
     | '/about'
     | '/privacy-policy'
     | '/user-agreement'
+    | '/login/$tenantSlug'
+    | '/oauth/oidc'
     | '/usage-logs/audit'
     | '/pricing/$modelId'
+    | '/login/'
     | '/account/'
+    | '/chat/'
     | '/dashboard/'
     | '/keys/'
     | '/models/'
@@ -342,28 +542,48 @@ export interface FileRouteTypes {
     | '/wallet/'
     | '/pricing/'
     | '/admin/settings/$section'
+    | '/admin/authz/'
+    | '/admin/cost-intelligence/'
+    | '/admin/diagnostics/'
+    | '/admin/model-limits/'
+    | '/admin/model-performance/'
+    | '/admin/model-pools/'
+    | '/admin/openrouter-sync/'
     | '/admin/redemption-codes/'
     | '/admin/settings/'
+    | '/admin/system-tasks/'
+    | '/admin/tenants/'
     | '/admin/users/'
     | '/ops/channels/'
     | '/ops/overview/'
     | '/ops/rules/'
     | '/org/billing/'
     | '/org/departments/'
+    | '/org/flows/'
     | '/org/keys-batch/'
     | '/org/members/'
     | '/org/policy/'
+    | '/org/pricing/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/404'
     | '/500'
+    | '/account-disabled'
+    | '/bridge-login'
+    | '/forbidden'
+    | '/register'
+    | '/setup'
     | '/about'
     | '/privacy-policy'
     | '/user-agreement'
+    | '/login/$tenantSlug'
+    | '/oauth/oidc'
     | '/usage-logs/audit'
     | '/pricing/$modelId'
+    | '/login'
     | '/account'
+    | '/chat'
     | '/dashboard'
     | '/keys'
     | '/models'
@@ -374,30 +594,50 @@ export interface FileRouteTypes {
     | '/wallet'
     | '/pricing'
     | '/admin/settings/$section'
+    | '/admin/authz'
+    | '/admin/cost-intelligence'
+    | '/admin/diagnostics'
+    | '/admin/model-limits'
+    | '/admin/model-performance'
+    | '/admin/model-pools'
+    | '/admin/openrouter-sync'
     | '/admin/redemption-codes'
     | '/admin/settings'
+    | '/admin/system-tasks'
+    | '/admin/tenants'
     | '/admin/users'
     | '/ops/channels'
     | '/ops/overview'
     | '/ops/rules'
     | '/org/billing'
     | '/org/departments'
+    | '/org/flows'
     | '/org/keys-batch'
     | '/org/members'
     | '/org/policy'
+    | '/org/pricing'
   id:
     | '__root__'
     | '/_authenticated'
     | '/_public'
     | '/404'
     | '/500'
+    | '/(auth)/account-disabled'
+    | '/(auth)/bridge-login'
+    | '/(auth)/forbidden'
+    | '/(auth)/register'
+    | '/(auth)/setup'
     | '/_public/about'
     | '/_public/privacy-policy'
     | '/_public/user-agreement'
     | '/_public/'
+    | '/(auth)/login/$tenantSlug'
+    | '/(auth)/oauth/oidc'
     | '/_authenticated/usage-logs/audit'
     | '/_public/pricing/$modelId'
+    | '/(auth)/login/'
     | '/_authenticated/account/'
+    | '/_authenticated/chat/'
     | '/_authenticated/dashboard/'
     | '/_authenticated/keys/'
     | '/_authenticated/models/'
@@ -408,17 +648,28 @@ export interface FileRouteTypes {
     | '/_authenticated/wallet/'
     | '/_public/pricing/'
     | '/_authenticated/admin/settings/$section'
+    | '/_authenticated/admin/authz/'
+    | '/_authenticated/admin/cost-intelligence/'
+    | '/_authenticated/admin/diagnostics/'
+    | '/_authenticated/admin/model-limits/'
+    | '/_authenticated/admin/model-performance/'
+    | '/_authenticated/admin/model-pools/'
+    | '/_authenticated/admin/openrouter-sync/'
     | '/_authenticated/admin/redemption-codes/'
     | '/_authenticated/admin/settings/'
+    | '/_authenticated/admin/system-tasks/'
+    | '/_authenticated/admin/tenants/'
     | '/_authenticated/admin/users/'
     | '/_authenticated/ops/channels/'
     | '/_authenticated/ops/overview/'
     | '/_authenticated/ops/rules/'
     | '/_authenticated/org/billing/'
     | '/_authenticated/org/departments/'
+    | '/_authenticated/org/flows/'
     | '/_authenticated/org/keys-batch/'
     | '/_authenticated/org/members/'
     | '/_authenticated/org/policy/'
+    | '/_authenticated/org/pricing/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -426,6 +677,14 @@ export interface RootRouteChildren {
   PublicRouteRoute: typeof PublicRouteRouteWithChildren
   R404Route: typeof R404Route
   R500Route: typeof R500Route
+  authAccountDisabledRoute: typeof authAccountDisabledRoute
+  authBridgeLoginRoute: typeof authBridgeLoginRoute
+  authForbiddenRoute: typeof authForbiddenRoute
+  authRegisterRoute: typeof authRegisterRoute
+  authSetupRoute: typeof authSetupRoute
+  authLoginTenantSlugRoute: typeof authLoginTenantSlugRoute
+  authOauthOidcRoute: typeof authOauthOidcRoute
+  authLoginIndexRoute: typeof authLoginIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -458,6 +717,41 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PublicRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/(auth)/account-disabled': {
+      id: '/(auth)/account-disabled'
+      path: '/account-disabled'
+      fullPath: '/account-disabled'
+      preLoaderRoute: typeof authAccountDisabledRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/(auth)/bridge-login': {
+      id: '/(auth)/bridge-login'
+      path: '/bridge-login'
+      fullPath: '/bridge-login'
+      preLoaderRoute: typeof authBridgeLoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/(auth)/forbidden': {
+      id: '/(auth)/forbidden'
+      path: '/forbidden'
+      fullPath: '/forbidden'
+      preLoaderRoute: typeof authForbiddenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/(auth)/register': {
+      id: '/(auth)/register'
+      path: '/register'
+      fullPath: '/register'
+      preLoaderRoute: typeof authRegisterRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/(auth)/setup': {
+      id: '/(auth)/setup'
+      path: '/setup'
+      fullPath: '/setup'
+      preLoaderRoute: typeof authSetupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_public/': {
       id: '/_public/'
       path: '/'
@@ -486,11 +780,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PublicUserAgreementRouteImport
       parentRoute: typeof PublicRouteRoute
     }
+    '/(auth)/login/': {
+      id: '/(auth)/login/'
+      path: '/login'
+      fullPath: '/login/'
+      preLoaderRoute: typeof authLoginIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/(auth)/login/$tenantSlug': {
+      id: '/(auth)/login/$tenantSlug'
+      path: '/login/$tenantSlug'
+      fullPath: '/login/$tenantSlug'
+      preLoaderRoute: typeof authLoginTenantSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/(auth)/oauth/oidc': {
+      id: '/(auth)/oauth/oidc'
+      path: '/oauth/oidc'
+      fullPath: '/oauth/oidc'
+      preLoaderRoute: typeof authOauthOidcRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_authenticated/account/': {
       id: '/_authenticated/account/'
       path: '/account'
       fullPath: '/account/'
       preLoaderRoute: typeof AuthenticatedAccountIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/chat/': {
+      id: '/_authenticated/chat/'
+      path: '/chat'
+      fullPath: '/chat/'
+      preLoaderRoute: typeof AuthenticatedChatIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/dashboard/': {
@@ -570,6 +892,55 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PublicPricingModelIdRouteImport
       parentRoute: typeof PublicRouteRoute
     }
+    '/_authenticated/admin/authz/': {
+      id: '/_authenticated/admin/authz/'
+      path: '/admin/authz'
+      fullPath: '/admin/authz/'
+      preLoaderRoute: typeof AuthenticatedAdminAuthzIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/admin/cost-intelligence/': {
+      id: '/_authenticated/admin/cost-intelligence/'
+      path: '/admin/cost-intelligence'
+      fullPath: '/admin/cost-intelligence/'
+      preLoaderRoute: typeof AuthenticatedAdminCostIntelligenceIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/admin/diagnostics/': {
+      id: '/_authenticated/admin/diagnostics/'
+      path: '/admin/diagnostics'
+      fullPath: '/admin/diagnostics/'
+      preLoaderRoute: typeof AuthenticatedAdminDiagnosticsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/admin/model-limits/': {
+      id: '/_authenticated/admin/model-limits/'
+      path: '/admin/model-limits'
+      fullPath: '/admin/model-limits/'
+      preLoaderRoute: typeof AuthenticatedAdminModelLimitsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/admin/model-performance/': {
+      id: '/_authenticated/admin/model-performance/'
+      path: '/admin/model-performance'
+      fullPath: '/admin/model-performance/'
+      preLoaderRoute: typeof AuthenticatedAdminModelPerformanceIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/admin/model-pools/': {
+      id: '/_authenticated/admin/model-pools/'
+      path: '/admin/model-pools'
+      fullPath: '/admin/model-pools/'
+      preLoaderRoute: typeof AuthenticatedAdminModelPoolsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/admin/openrouter-sync/': {
+      id: '/_authenticated/admin/openrouter-sync/'
+      path: '/admin/openrouter-sync'
+      fullPath: '/admin/openrouter-sync/'
+      preLoaderRoute: typeof AuthenticatedAdminOpenrouterSyncIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/admin/redemption-codes/': {
       id: '/_authenticated/admin/redemption-codes/'
       path: '/admin/redemption-codes'
@@ -589,6 +960,20 @@ declare module '@tanstack/react-router' {
       path: '/admin/settings/$section'
       fullPath: '/admin/settings/$section'
       preLoaderRoute: typeof AuthenticatedAdminSettingsSectionRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/admin/system-tasks/': {
+      id: '/_authenticated/admin/system-tasks/'
+      path: '/admin/system-tasks'
+      fullPath: '/admin/system-tasks/'
+      preLoaderRoute: typeof AuthenticatedAdminSystemTasksIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/admin/tenants/': {
+      id: '/_authenticated/admin/tenants/'
+      path: '/admin/tenants'
+      fullPath: '/admin/tenants/'
+      preLoaderRoute: typeof AuthenticatedAdminTenantsIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/admin/users/': {
@@ -633,6 +1018,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedOrgDepartmentsIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/org/flows/': {
+      id: '/_authenticated/org/flows/'
+      path: '/org/flows'
+      fullPath: '/org/flows/'
+      preLoaderRoute: typeof AuthenticatedOrgFlowsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/org/keys-batch/': {
       id: '/_authenticated/org/keys-batch/'
       path: '/org/keys-batch'
@@ -654,12 +1046,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedOrgPolicyIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/org/pricing/': {
+      id: '/_authenticated/org/pricing/'
+      path: '/org/pricing'
+      fullPath: '/org/pricing/'
+      preLoaderRoute: typeof AuthenticatedOrgPricingIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
   }
 }
 
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedUsageLogsAuditRoute: typeof AuthenticatedUsageLogsAuditRoute
   AuthenticatedAccountIndexRoute: typeof AuthenticatedAccountIndexRoute
+  AuthenticatedChatIndexRoute: typeof AuthenticatedChatIndexRoute
   AuthenticatedDashboardIndexRoute: typeof AuthenticatedDashboardIndexRoute
   AuthenticatedKeysIndexRoute: typeof AuthenticatedKeysIndexRoute
   AuthenticatedModelsIndexRoute: typeof AuthenticatedModelsIndexRoute
@@ -669,22 +1069,34 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedUsageLogsIndexRoute: typeof AuthenticatedUsageLogsIndexRoute
   AuthenticatedWalletIndexRoute: typeof AuthenticatedWalletIndexRoute
   AuthenticatedAdminSettingsSectionRoute: typeof AuthenticatedAdminSettingsSectionRoute
+  AuthenticatedAdminAuthzIndexRoute: typeof AuthenticatedAdminAuthzIndexRoute
+  AuthenticatedAdminCostIntelligenceIndexRoute: typeof AuthenticatedAdminCostIntelligenceIndexRoute
+  AuthenticatedAdminDiagnosticsIndexRoute: typeof AuthenticatedAdminDiagnosticsIndexRoute
+  AuthenticatedAdminModelLimitsIndexRoute: typeof AuthenticatedAdminModelLimitsIndexRoute
+  AuthenticatedAdminModelPerformanceIndexRoute: typeof AuthenticatedAdminModelPerformanceIndexRoute
+  AuthenticatedAdminModelPoolsIndexRoute: typeof AuthenticatedAdminModelPoolsIndexRoute
+  AuthenticatedAdminOpenrouterSyncIndexRoute: typeof AuthenticatedAdminOpenrouterSyncIndexRoute
   AuthenticatedAdminRedemptionCodesIndexRoute: typeof AuthenticatedAdminRedemptionCodesIndexRoute
   AuthenticatedAdminSettingsIndexRoute: typeof AuthenticatedAdminSettingsIndexRoute
+  AuthenticatedAdminSystemTasksIndexRoute: typeof AuthenticatedAdminSystemTasksIndexRoute
+  AuthenticatedAdminTenantsIndexRoute: typeof AuthenticatedAdminTenantsIndexRoute
   AuthenticatedAdminUsersIndexRoute: typeof AuthenticatedAdminUsersIndexRoute
   AuthenticatedOpsChannelsIndexRoute: typeof AuthenticatedOpsChannelsIndexRoute
   AuthenticatedOpsOverviewIndexRoute: typeof AuthenticatedOpsOverviewIndexRoute
   AuthenticatedOpsRulesIndexRoute: typeof AuthenticatedOpsRulesIndexRoute
   AuthenticatedOrgBillingIndexRoute: typeof AuthenticatedOrgBillingIndexRoute
   AuthenticatedOrgDepartmentsIndexRoute: typeof AuthenticatedOrgDepartmentsIndexRoute
+  AuthenticatedOrgFlowsIndexRoute: typeof AuthenticatedOrgFlowsIndexRoute
   AuthenticatedOrgKeysBatchIndexRoute: typeof AuthenticatedOrgKeysBatchIndexRoute
   AuthenticatedOrgMembersIndexRoute: typeof AuthenticatedOrgMembersIndexRoute
   AuthenticatedOrgPolicyIndexRoute: typeof AuthenticatedOrgPolicyIndexRoute
+  AuthenticatedOrgPricingIndexRoute: typeof AuthenticatedOrgPricingIndexRoute
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedUsageLogsAuditRoute: AuthenticatedUsageLogsAuditRoute,
   AuthenticatedAccountIndexRoute: AuthenticatedAccountIndexRoute,
+  AuthenticatedChatIndexRoute: AuthenticatedChatIndexRoute,
   AuthenticatedDashboardIndexRoute: AuthenticatedDashboardIndexRoute,
   AuthenticatedKeysIndexRoute: AuthenticatedKeysIndexRoute,
   AuthenticatedModelsIndexRoute: AuthenticatedModelsIndexRoute,
@@ -695,18 +1107,36 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedWalletIndexRoute: AuthenticatedWalletIndexRoute,
   AuthenticatedAdminSettingsSectionRoute:
     AuthenticatedAdminSettingsSectionRoute,
+  AuthenticatedAdminAuthzIndexRoute: AuthenticatedAdminAuthzIndexRoute,
+  AuthenticatedAdminCostIntelligenceIndexRoute:
+    AuthenticatedAdminCostIntelligenceIndexRoute,
+  AuthenticatedAdminDiagnosticsIndexRoute:
+    AuthenticatedAdminDiagnosticsIndexRoute,
+  AuthenticatedAdminModelLimitsIndexRoute:
+    AuthenticatedAdminModelLimitsIndexRoute,
+  AuthenticatedAdminModelPerformanceIndexRoute:
+    AuthenticatedAdminModelPerformanceIndexRoute,
+  AuthenticatedAdminModelPoolsIndexRoute:
+    AuthenticatedAdminModelPoolsIndexRoute,
+  AuthenticatedAdminOpenrouterSyncIndexRoute:
+    AuthenticatedAdminOpenrouterSyncIndexRoute,
   AuthenticatedAdminRedemptionCodesIndexRoute:
     AuthenticatedAdminRedemptionCodesIndexRoute,
   AuthenticatedAdminSettingsIndexRoute: AuthenticatedAdminSettingsIndexRoute,
+  AuthenticatedAdminSystemTasksIndexRoute:
+    AuthenticatedAdminSystemTasksIndexRoute,
+  AuthenticatedAdminTenantsIndexRoute: AuthenticatedAdminTenantsIndexRoute,
   AuthenticatedAdminUsersIndexRoute: AuthenticatedAdminUsersIndexRoute,
   AuthenticatedOpsChannelsIndexRoute: AuthenticatedOpsChannelsIndexRoute,
   AuthenticatedOpsOverviewIndexRoute: AuthenticatedOpsOverviewIndexRoute,
   AuthenticatedOpsRulesIndexRoute: AuthenticatedOpsRulesIndexRoute,
   AuthenticatedOrgBillingIndexRoute: AuthenticatedOrgBillingIndexRoute,
   AuthenticatedOrgDepartmentsIndexRoute: AuthenticatedOrgDepartmentsIndexRoute,
+  AuthenticatedOrgFlowsIndexRoute: AuthenticatedOrgFlowsIndexRoute,
   AuthenticatedOrgKeysBatchIndexRoute: AuthenticatedOrgKeysBatchIndexRoute,
   AuthenticatedOrgMembersIndexRoute: AuthenticatedOrgMembersIndexRoute,
   AuthenticatedOrgPolicyIndexRoute: AuthenticatedOrgPolicyIndexRoute,
+  AuthenticatedOrgPricingIndexRoute: AuthenticatedOrgPricingIndexRoute,
 }
 
 const AuthenticatedRouteRouteWithChildren =
@@ -739,6 +1169,14 @@ const rootRouteChildren: RootRouteChildren = {
   PublicRouteRoute: PublicRouteRouteWithChildren,
   R404Route: R404Route,
   R500Route: R500Route,
+  authAccountDisabledRoute: authAccountDisabledRoute,
+  authBridgeLoginRoute: authBridgeLoginRoute,
+  authForbiddenRoute: authForbiddenRoute,
+  authRegisterRoute: authRegisterRoute,
+  authSetupRoute: authSetupRoute,
+  authLoginTenantSlugRoute: authLoginTenantSlugRoute,
+  authOauthOidcRoute: authOauthOidcRoute,
+  authLoginIndexRoute: authLoginIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
