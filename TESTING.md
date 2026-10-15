@@ -5,9 +5,9 @@ one says nothing about the others.
 
 | Layer | Question it answers | Where | Runs |
 |-------|---------------------|-------|------|
-| 1. Unit / package | Does this function do what its author meant? | `*_test.go`, `web/src/**/*.test.jsx` | every PR (go-ci, web-ci) |
-| 2. Real-chain acceptance | Does a customer get the right answer **and pay the right amount** through the real binary, real migrations and production's settings? | `web/tests/acceptance/`, `scripts/acceptance-stack.sh` | every PR (acceptance.yml) |
-| 3. Live | Does the deployed instance still behave? | `web/tests/e2e/` against UAT, post-deploy verify | nightly + after each rollout (web-ci e2e) |
+| 1. Unit / package | Does this function do what its author meant? | `*_test.go`, `web/next/src/**/*.test.ts(x)` | every PR (go-ci, web-ci) |
+| 2. Real-chain acceptance | Does a customer get the right answer **and pay the right amount** through the real binary, real migrations and production's settings? | `web/next/acceptance/`, `scripts/acceptance-stack.sh` | every PR (acceptance.yml) |
+| 3. Live | Does the deployed instance still behave? | `web/next/e2e/` against UAT, post-deploy verify | nightly + after each rollout (web-ci e2e) |
 
 Why layer 2 exists: every defect that reached production in 2026-09 passed
 layer 1, because layer 1 tests a *model* of the system — SQLite instead of
@@ -23,7 +23,7 @@ go test -short ./...                       # unit (skips integration via testing
 go test -race -short ./...                 # race detector — run before merging
 go test -run Integration ./...             # integration (needs PostgreSQL)
 go test ./internal/adapter/handler/        # one package (never a single file: it lacks the package's other files)
-cd web && bun run test                     # vitest; also lint (prettier), eslint, check:casing
+cd web/next && bun run test                # vitest; also bun run typecheck and bun run lint (oxlint)
 ```
 
 Names: `Test<Subject>_<Method>_<Behavior>`, table-driven where there are
@@ -67,7 +67,7 @@ raised: tests written to move a percentage (the `cov_*` / `*_extra` /
 bash scripts/acceptance-stack.sh                    # build, start, run, tear down
 ACCEPT_KEEP=1 bash scripts/acceptance-stack.sh      # leave the stack up afterwards
 ACCEPT_UP_ONLY=1 bash scripts/acceptance-stack.sh   # only start it; then:
-  . web/acceptance-report/stack.env && cd web && bunx playwright test -c playwright.acceptance.config.ts
+  . web/next/acceptance-report/stack.env && cd web/next && bunx playwright test -c playwright.acceptance.config.ts
 ```
 
 Linux (WSL works). Needs go, bun and docker. The script starts PostgreSQL 16
@@ -77,7 +77,7 @@ with r6-stage's environment — unified billing on, credit pool enforced,
 channel cache syncing every 60s — and runs the scenarios. The deviations
 from r6-stage (no IdP, plain http, no NATS) are listed in the script.
 
-What a scenario looks like (`web/tests/acceptance/*.spec.ts`):
+What a scenario looks like (`web/next/acceptance/*.spec.ts`):
 
 - its title names its case in `doc/uat/business-acceptance-tests.md`
   (`TC-M1 …`);
@@ -102,7 +102,7 @@ not been shown to test anything.
 
 ## Layer 3 — live
 
-`web/tests/e2e/` runs against the UAT instance (`test-newhub.lurus.cn`):
+`web/next/e2e/` runs against the UAT instance (`test-newhub.lurus.cn`):
 nightly at 03:00 Beijing and after each rollout (docker-image-main.yml
 `verify_rollout` dispatches it and the result is posted on the PR). See
 `deploy/k8s/r6-uat/README.md` for the instance and the bridge login.

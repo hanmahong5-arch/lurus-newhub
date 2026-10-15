@@ -32,12 +32,12 @@ cp .env.example .env                # 填写 SQL_DSN 与 SESSION_SECRET(均必�
 go run ./cmd/server                  # 监听 :3000 (PORT)
 
 # --- 前端控制台 (Bun; web/ 有独立 package.json) ---
-cd web && bun install && bun run dev # :5173, API 请求代理到 :3000
+cd web/next && bun install && bun run dev # 控制台 dev server,API 请求代理到 :3000
 
 # --- 测试 ---
 go test -short ./...                 # 仅单元测试,跳过集成测试(testing.Short())
 go test -short -race -count=1 -timeout=15m ./...  # CI 强制合并门(.github/workflows/go-ci.yml)
-cd web && bun run test && bun run lint && bun run eslint
+cd web/next && bun run typecheck && bun run lint && bun run test
 
 # --- Docker Compose (自带 server + Postgres + Redis) ---
 docker-compose up -d                 # http://localhost:3000
@@ -68,7 +68,7 @@ internal/
 │   └── provider/            # 各厂商适配器 (openai/、claude/、gemini/、aws/、baidu/ 等)
 ├── lifecycle/             # leader election、优雅关闭、密钥轮换
 └── pkg/                   # config、logger、metrics、tracing、search、migration、nats、resilience
-web/                       # React 18 + Vite + Semi UI 控制台 (Bun;6 种语言,见 web/src/i18n/locales/)
+web/next/                  # 控制台:React 19 + TanStack + shadcn/Tailwind 4 + rsbuild(Bun)
 migrations/                # PostgreSQL SQL migration (001-020 为历史记账用基线,部分仅 MySQL 方言;021 起才是当前 PG-only、幂等的真实序列)
 deploy/k8s/                # Kubernetes 清单 (staging/UAT overlay)
 ```
@@ -107,7 +107,6 @@ deploy/k8s/                # Kubernetes 清单 (staging/UAT overlay)
 
 - 测试文件命名 `*_test.go` / `*_integration_test.go` / `*_benchmark_test.go`;测试函数命名 `Test<Subject>_<Method>_<Behavior>`,优先表驱动写法(详见 [`TESTING.md`](./TESTING.md))。
 - CI 按分层强制覆盖率下限，随覆盖率提升逐步上调（ratchet）：`internal/app/` ≥ 86%、`internal/adapter/repo/` ≥ 77%、`internal/adapter/handler/` ≥ 64%（`.github/workflows/go-ci.yml`）。
-- `web/` 是纯 JS,不是 TypeScript——没有 `typecheck` 脚本;前端真实的检查闸是 `bun run lint`(prettier)与 `bun run eslint`。
 - 数据库 schema 变更以 `migrations/` 下新文件的形式提交,`021_` 起为 PostgreSQL-only 且幂等。
 - 部署走 GitOps:合并进 `main` 会构建并发布镜像,由另一个独立的协调器完成集群收敛——本仓自身不直接驱动 `kubectl`(详见 [`DEPLOY.md`](./DEPLOY.md))。
 

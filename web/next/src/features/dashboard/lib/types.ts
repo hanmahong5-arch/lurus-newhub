@@ -108,3 +108,22 @@ export interface FAQItem {
   question: string
   answer: string
 }
+
+/**
+ * One monitor of GET /api/uptime/status (handler.Monitor). `status` is the
+ * Uptime Kuma heartbeat code; `uptime` is the 24-hour availability ratio
+ * (0..1).
+ */
+export interface UptimeMonitor {
+  name: string
+  uptime: number
+  status: number
+  /** Uptime Kuma's own sub-group of the monitor, when it has one. */
+  group?: string
+}
+
+/** One configured Uptime Kuma group (handler.UptimeGroupResult). */
+export interface UptimeGroup {
+  categoryName: string
+  monitors: UptimeMonitor[]
+}

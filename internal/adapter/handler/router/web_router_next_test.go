@@ -11,10 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const (
-	legacyIndexHTML = "<!doctype html><title>legacy console</title>"
-	nextIndexHTML   = "<!doctype html><title>next console</title>"
-)
+const nextIndexHTML = "<!doctype html><title>console</title>"
 
 // newConsoleEngine mounts the real web chain over a synthetic dist. The Go CI
 // jobs stub web/dist down to a lone index.html, so a /next build has to be
@@ -33,14 +30,12 @@ func newConsoleEngine(t *testing.T, dist fstest.MapFS) *gin.Engine {
 	common.RedisEnabled = false
 
 	engine := gin.New()
-	setWebRoutes(engine, dist, mapServeFS{http.FS(dist)}, []byte(legacyIndexHTML))
+	setWebRoutes(engine, dist, mapServeFS{http.FS(dist)}, []byte(nextIndexHTML))
 	return engine
 }
 
 func nextDist() fstest.MapFS {
 	return fstest.MapFS{
-		"index.html":                        {Data: []byte(legacyIndexHTML)},
-		"assets/legacy-DEADBEEF.js":         {Data: []byte("console.log('legacy');")},
 		"next/index.html":                   {Data: []byte(nextIndexHTML)},
 		"next/logo.png":                     {Data: []byte("\x89PNG not really a png")},
 		"next/static/js/index.abc123.js":    {Data: []byte("console.log('next');")},
@@ -76,17 +71,31 @@ func TestWebRouter_SiteRootPagesGetTheNextDocument(t *testing.T) {
 	}
 }
 
-func TestWebRouter_LegacyConsoleKeepsOnlyConsolePaths(t *testing.T) {
+func TestWebRouter_RetiredConsoleURLsRedirectToTheirNewPages(t *testing.T) {
 	engine := newConsoleEngine(t, nextDist())
 
-	// Only /console/* is left on the legacy document (old bookmarks).
-	for _, path := range []string{"/console", "/console/v2/dashboard", "/console/next/keys", "/console/openrouter-sync"} {
+	for path, want := range map[string]string{
+		"/console":                            "/dashboard",
+		"/console/":                           "/dashboard",
+		"/console/v2/dashboard":               "/dashboard",
+		"/console/v2/token":                   "/keys",
+		"/console/v2/log?p=3":                 "/usage-logs",
+		"/console/v2/admin/diagnostics":       "/admin/diagnostics",
+		"/console/v2/admin/cost-intelligence": "/admin/cost-intelligence",
+		"/console/openrouter-sync":            "/admin/openrouter-sync",
+		"/console/chat/12":                    "/chat",
+		"/console/v2/no-such-page":            "/dashboard",
+		"/console/next/keys":                  "/dashboard",
+	} {
 		w := getPath(engine, path)
-		if w.Code != http.StatusOK {
-			t.Fatalf("GET %s = %d, want 200", path, w.Code)
+		if w.Code != http.StatusFound {
+			t.Fatalf("GET %s = %d, want 302", path, w.Code)
 		}
-		if got := w.Body.String(); got != legacyIndexHTML {
-			t.Fatalf("GET %s served %q, want the legacy document", path, got)
+		if got := w.Header().Get("Location"); got != want {
+			t.Fatalf("GET %s Location = %q, want %q", path, got, want)
+		}
+		if got := w.Header().Get("Cache-Control"); got != "no-cache" {
+			t.Fatalf("GET %s Cache-Control = %q, want no-cache: a cached redirect would outlive a rollback", path, got)
 		}
 	}
 }
@@ -110,23 +119,6 @@ func TestWebRouter_OldNextBookmarksRedirectToTheSiteRoot(t *testing.T) {
 		}
 		if got := w.Header().Get("Cache-Control"); got != "no-cache" {
 			t.Fatalf("GET %s Cache-Control = %q, want no-cache: a cached redirect would outlive a rollback", path, got)
-		}
-	}
-}
-
-func TestWebRouter_EverythingIsLegacyWithoutANextBuild(t *testing.T) {
-	// CI stubs dist to a single index.html; no page may 404 or panic.
-	engine := newConsoleEngine(t, fstest.MapFS{
-		"index.html": {Data: []byte(legacyIndexHTML)},
-	})
-
-	for _, path := range []string{"/", "/dashboard", "/next", "/next/", "/next/keys", "/login"} {
-		w := getPath(engine, path)
-		if w.Code != http.StatusOK {
-			t.Fatalf("GET %s = %d, want 200", path, w.Code)
-		}
-		if got := w.Body.String(); got != legacyIndexHTML {
-			t.Fatalf("GET %s served %q, want the legacy document", path, got)
 		}
 	}
 }
@@ -182,7 +174,7 @@ func TestWebRouter_NextDocumentIsBehindTheSameRateLimitAsTheLegacyOne(t *testing
 	budgetOfTwo(t)
 	dist := nextDist()
 	engine := gin.New()
-	setWebRoutes(engine, dist, mapServeFS{http.FS(dist)}, []byte(legacyIndexHTML))
+	setWebRoutes(engine, dist, mapServeFS{http.FS(dist)}, []byte(nextIndexHTML))
 
 	const clientIP = "198.51.100.77:40000"
 

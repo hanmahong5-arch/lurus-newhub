@@ -97,6 +97,11 @@ export default defineConfig(({ envMode }) => {
       // Served under /next/ (internal/adapter/handler/router/web-router.go).
       assetPrefix: '/next/',
       cleanDistPath: true,
+      // Files the site has always served from its root (/robots.txt,
+      // /logo.png, /favicon.ico, and /downloads/** — the desktop apps' update
+      // manifests read those URLs). They land in web/dist itself, next to
+      // the console's own dist/next, so every old URL keeps resolving.
+      copy: [{ from: './site-root', to: '..' }],
       // Rely on Rsbuild default legalComments ("linked" → per-chunk *.LICENSE.txt) in all modes.
       // Do not set "none" in production: that strips minifier-preserved third-party notices and
       // extracted license files, which some distributions require for open-source compliance.

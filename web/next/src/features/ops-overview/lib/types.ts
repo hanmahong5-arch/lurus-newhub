@@ -71,3 +71,32 @@ export interface ProbeResult {
   /** The server capped the channel list; later channels are not shown. */
   truncated: boolean
 }
+
+/**
+ * One channel's circuit breaker as the relay sees it
+ * (GET /api/v2/admin/gateway/health -> data.routes[]).
+ */
+export interface GatewayRoute {
+  channel_id: number
+  /** "closed" | "open" | "half_open"; anything else is shown verbatim. */
+  state: string
+  consecutive_fails: number
+  threshold: number
+  /** 0 = never failed. */
+  last_fail_unix: number
+  /** When an open / half-open breaker may be probed again; 0 / absent = n/a. */
+  probe_eligible_unix?: number
+  channel_name?: string
+  provider?: string
+}
+
+export interface GatewayHealth {
+  routes: GatewayRoute[]
+  tracked: number
+  open: number
+  half_open: number
+  /** Breaker state is per replica: this is one pod's view. */
+  replica_scoped: boolean
+  /** Breakers register on first use: a channel with no traffic is absent. */
+  lazy_registered: boolean
+}

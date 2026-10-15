@@ -553,3 +553,350 @@ describe('logs', () => {
     expect(await screen.findByRole('button', { name: 'Clean logs' })).toBeDisabled()
   })
 })
+
+const MAIL_OPTIONS: Option[] = [
+  { key: 'SMTPServer', value: 'smtp.example.com' },
+  { key: 'SMTPPort', value: '587' },
+  { key: 'SMTPAccount', value: 'mailer@example.com' },
+  { key: 'SMTPFrom', value: 'noreply@example.com' },
+  // The server withholds this key; even if a stale copy reached the page it
+  // must never be put in the field.
+  { key: 'SMTPToken', value: 'stored-secret' },
+  { key: 'SMTPSSLEnabled', value: 'false' },
+]
+
+describe('email (SMTP)', () => {
+  it('is reachable from the section list under its own slug', async () => {
+    installApi({})
+    renderPage('branding')
+    const nav = await screen.findByRole('navigation', {
+      name: 'Settings sections',
+    })
+    await userEvent.click(within(nav).getByRole('link', { name: 'Email (SMTP)' }))
+    expect(navigate).toHaveBeenCalledWith({
+      to: '/admin/settings/$section',
+      params: { section: 'email' },
+    })
+  })
+
+  it('shows the stored values, never prefills the secret and sends only changes', async () => {
+    const puts = installApi({ list: MAIL_OPTIONS })
+    renderPage('email')
+    expect(await screen.findByLabelText('SMTP server')).toHaveValue(
+      'smtp.example.com'
+    )
+    expect(screen.getByLabelText('SMTP port')).toHaveValue(587)
+    expect(screen.getByLabelText('SMTP account')).toHaveValue(
+      'mailer@example.com'
+    )
+    expect(screen.getByLabelText('Sender address')).toHaveValue(
+      'noreply@example.com'
+    )
+    const token = screen.getByLabelText('SMTP password or access code')
+    expect(token).toHaveValue('')
+    expect(token).toHaveAttribute('type', 'password')
+    expect(screen.getByRole('switch', { name: 'Use SSL' })).not.toBeChecked()
+
+    // Saving with the secret left blank must not write it.
+    const server = screen.getByLabelText('SMTP server')
+    await userEvent.clear(server)
+    await userEvent.type(server, 'smtp.other.example.com')
+    const port = screen.getByLabelText('SMTP port')
+    await userEvent.clear(port)
+    await userEvent.type(port, '465')
+    await userEvent.click(screen.getByRole('switch', { name: 'Use SSL' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+    await waitFor(() => expect(puts).toHaveLength(3))
+    expect(puts).toEqual([
+      { key: 'SMTPServer', value: 'smtp.other.example.com' },
+      { key: 'SMTPPort', value: '465' },
+      { key: 'SMTPSSLEnabled', value: true },
+    ])
+    expect(puts.some((put) => put.key === 'SMTPToken')).toBe(false)
+  })
+
+  it('writes the secret only when one is typed', async () => {
+    const puts = installApi({ list: MAIL_OPTIONS })
+    renderPage('email')
+    await userEvent.type(
+      await screen.findByLabelText('SMTP password or access code'),
+      'new-code'
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect(puts[0]).toEqual({ key: 'SMTPToken', value: 'new-code' })
+  })
+
+  it('refuses a port outside 1-65535 before sending', async () => {
+    const puts = installApi({ list: MAIL_OPTIONS })
+    renderPage('email')
+    const port = await screen.findByLabelText('SMTP port')
+    await userEvent.clear(port)
+    await userEvent.type(port, '70000')
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    expect(await screen.findByText('Value is above the maximum')).toBeVisible()
+    expect(puts).toHaveLength(0)
+  })
+
+  it('shows a refusal sent as HTTP 200 success:false and keeps the edit', async () => {
+    const puts = installApi({
+      list: MAIL_OPTIONS,
+      onPut: () => ({
+        status: 200,
+        body: { success: false, message: 'smtp host is not allowed' },
+      }),
+    })
+    renderPage('email')
+    const server = await screen.findByLabelText('SMTP server')
+    await userEvent.clear(server)
+    await userEvent.type(server, 'localhost')
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+    expect(await screen.findByText('smtp host is not allowed')).toBeVisible()
+    expect(puts).toHaveLength(1)
+    expect(toastError).toHaveBeenCalledWith(
+      'SMTP server: smtp host is not allowed'
+    )
+    expect(toastSuccess).not.toHaveBeenCalled()
+    expect(server).toHaveValue('localhost')
+  })
+})
+
+describe('drawing', () => {
+  const DRAWING_OPTIONS: Option[] = [
+    { key: 'DrawingEnabled', value: 'true' },
+    { key: 'MjNotifyEnabled', value: 'false' },
+    { key: 'MjAccountFilterEnabled', value: 'false' },
+    { key: 'MjModeClearEnabled', value: 'true' },
+    { key: 'MjForwardUrlEnabled', value: 'false' },
+    { key: 'MjActionCheckSuccessEnabled', value: 'false' },
+  ]
+
+  it('is reachable from the section list under its own slug', async () => {
+    installApi({})
+    renderPage('branding')
+    const nav = await screen.findByRole('navigation', {
+      name: 'Settings sections',
+    })
+    await userEvent.click(within(nav).getByRole('link', { name: 'Drawing' }))
+    expect(navigate).toHaveBeenCalledWith({
+      to: '/admin/settings/$section',
+      params: { section: 'drawing' },
+    })
+  })
+
+  it('shows the stored switches and sends only the ones flipped', async () => {
+    const puts = installApi({ list: DRAWING_OPTIONS })
+    renderPage('drawing')
+    expect(
+      await screen.findByRole('switch', { name: 'Enable drawing' })
+    ).toBeChecked()
+    expect(
+      screen.getByRole('switch', { name: 'Allow callbacks' })
+    ).not.toBeChecked()
+    expect(
+      screen.getByRole('switch', { name: 'Strip speed modes from prompts' })
+    ).toBeChecked()
+
+    await userEvent.click(screen.getByRole('switch', { name: 'Allow callbacks' }))
+    await userEvent.click(
+      screen.getByRole('switch', { name: 'Strip speed modes from prompts' })
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+    await waitFor(() => expect(puts).toHaveLength(2))
+    expect(puts).toEqual([
+      { key: 'MjNotifyEnabled', value: true },
+      { key: 'MjModeClearEnabled', value: false },
+    ])
+  })
+
+  it('shows a server refusal as an error', async () => {
+    installApi({
+      list: DRAWING_OPTIONS,
+      onPut: () => ({
+        status: 200,
+        body: { success: false, message: 'drawing is locked' },
+      }),
+    })
+    renderPage('drawing')
+    await userEvent.click(
+      await screen.findByRole('switch', { name: 'Enable drawing' })
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    expect(await screen.findByText('drawing is locked')).toBeVisible()
+    expect(toastError).toHaveBeenCalledWith('Enable drawing: drawing is locked')
+  })
+})
+
+describe('pre-consumed quota', () => {
+  it('shows the stored amount and saves a changed one as a string', async () => {
+    const puts = installApi({
+      list: [{ key: 'PreConsumedQuota', value: '500' }],
+    })
+    renderPage('quota')
+    const field = await screen.findByLabelText('Pre-Consumed Quota')
+    expect(field).toHaveValue(500)
+    await userEvent.clear(field)
+    await userEvent.type(field, '2000')
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect(puts[0]).toEqual({ key: 'PreConsumedQuota', value: '2000' })
+  })
+
+  it('refuses a negative amount and shows a server refusal', async () => {
+    const puts = installApi({
+      list: [{ key: 'PreConsumedQuota', value: '500' }],
+      onPut: () => ({
+        status: 200,
+        body: { success: false, message: 'too large' },
+      }),
+    })
+    renderPage('quota')
+    const field = await screen.findByLabelText('Pre-Consumed Quota')
+    await userEvent.clear(field)
+    await userEvent.type(field, '-1')
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    expect(await screen.findByText('Value is below the minimum')).toBeVisible()
+    expect(puts).toHaveLength(0)
+
+    await userEvent.clear(field)
+    await userEvent.type(field, '99')
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    expect(await screen.findByText('too large')).toBeVisible()
+    expect(puts).toHaveLength(1)
+  })
+})
+
+describe('currency conversion', () => {
+  const CURRENCY_OPTIONS: Option[] = [
+    { key: 'general_setting.quota_display_type', value: 'USD' },
+    { key: 'USDExchangeRate', value: '7.3' },
+    { key: 'QuotaPerUnit', value: '500000' },
+    { key: 'Price', value: '7.3' },
+  ]
+  const PRICE_LABEL = 'Display exchange price (CNY per USD)'
+
+  it('shows the current values and warns before they are edited', async () => {
+    installApi({ list: CURRENCY_OPTIONS })
+    renderPage('currency')
+    expect(await screen.findByLabelText('Quota per USD')).toHaveValue(500000)
+    expect(screen.getByLabelText(PRICE_LABEL)).toHaveValue(7.3)
+    expect(screen.getByRole('note')).toHaveTextContent(
+      /change what every account sees and is charged/
+    )
+  })
+
+  it('asks for confirmation, sends nothing on cancel and writes on confirm', async () => {
+    const puts = installApi({ list: CURRENCY_OPTIONS })
+    renderPage('currency')
+    const field = await screen.findByLabelText('Quota per USD')
+    await userEvent.clear(field)
+    await userEvent.type(field, '1000000')
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+    let dialog = await screen.findByRole('alertdialog')
+    expect(within(dialog).getByText('Change money conversion?')).toBeVisible()
+    expect(within(dialog).getByText(/500000 -> 1000000/)).toBeVisible()
+    expect(puts).toHaveLength(0)
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    expect(puts).toHaveLength(0)
+    expect(field).toHaveValue(1000000)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    dialog = await screen.findByRole('alertdialog')
+    await userEvent.click(
+      within(dialog).getByRole('button', { name: 'Change conversion' })
+    )
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect(puts[0]).toEqual({ key: 'QuotaPerUnit', value: '1000000' })
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalled())
+  })
+
+  it('confirms the exchange price too', async () => {
+    const puts = installApi({ list: CURRENCY_OPTIONS })
+    renderPage('currency')
+    const field = await screen.findByLabelText(PRICE_LABEL)
+    await userEvent.clear(field)
+    await userEvent.type(field, '7.1')
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(puts).toHaveLength(0)
+    await userEvent.click(
+      within(dialog).getByRole('button', { name: 'Change conversion' })
+    )
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect(puts[0]).toEqual({ key: 'Price', value: '7.1' })
+  })
+
+  it.each(['0', '-5'])('rejects %s without asking or sending', async (bad) => {
+    const puts = installApi({ list: CURRENCY_OPTIONS })
+    renderPage('currency')
+    const field = await screen.findByLabelText('Quota per USD')
+    await userEvent.clear(field)
+    await userEvent.type(field, bad)
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    expect(await screen.findByText('Must be greater than 0')).toBeVisible()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(puts).toHaveLength(0)
+  })
+
+  it('rejects a non-positive exchange price too', async () => {
+    const puts = installApi({ list: CURRENCY_OPTIONS })
+    renderPage('currency')
+    const field = await screen.findByLabelText(PRICE_LABEL)
+    await userEvent.clear(field)
+    await userEvent.type(field, '0')
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    expect(await screen.findByText('Must be greater than 0')).toBeVisible()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(puts).toHaveLength(0)
+  })
+
+  it('does not ask when only an unguarded field changed', async () => {
+    const puts = installApi({ list: CURRENCY_OPTIONS })
+    renderPage('currency')
+    await userEvent.click(
+      await screen.findByRole('switch', { name: 'Display Token Statistics' })
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect(puts[0]).toEqual({ key: 'DisplayTokenStatEnabled', value: true })
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+  })
+
+  it('shows a refusal after the confirmation and keeps the edit', async () => {
+    const puts = installApi({
+      list: CURRENCY_OPTIONS,
+      onPut: () => ({
+        status: 200,
+        body: { success: false, message: 'QuotaPerUnit is out of range' },
+      }),
+    })
+    renderPage('currency')
+    const field = await screen.findByLabelText('Quota per USD')
+    await userEvent.clear(field)
+    await userEvent.type(field, '2000000000')
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    // Over the client-side ceiling: refused before any dialog.
+    expect(await screen.findByText('Value is above the maximum')).toBeVisible()
+    expect(puts).toHaveLength(0)
+
+    await userEvent.clear(field)
+    await userEvent.type(field, '300')
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    const dialog = await screen.findByRole('alertdialog')
+    await userEvent.click(
+      within(dialog).getByRole('button', { name: 'Change conversion' })
+    )
+    expect(await screen.findByText('QuotaPerUnit is out of range')).toBeVisible()
+    expect(puts).toHaveLength(1)
+    expect(toastError).toHaveBeenCalledWith(
+      'Quota per USD: QuotaPerUnit is out of range'
+    )
+    expect(field).toHaveValue(300)
+  })
+})

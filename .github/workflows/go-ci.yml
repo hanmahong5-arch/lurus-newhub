@@ -13,14 +13,14 @@ on:
       # to one of them can turn this workflow red without touching any .go file:
       # deploy/k8s/deploy_consistency_test.go walks deploy/, scripts/, doc/runbook/
       # and the workflow files; internal/pkg/migration reads migrations/;
-      # internal/pkg/gates and the router contract gates read web/src/.
+      # the router contract gates read web/next/src/.
       # deploy/k8s/deploy_consistency_test.go TestGoCIPathsCoverWhatGoTestsRead
       # fails when a directory in that set is missing from this list.
       - 'deploy/**'
       - 'migrations/**'
       - 'scripts/**'
       - 'doc/runbook/**'
-      - 'web/src/**'
+      - 'web/next/src/**'
       - '.env.example'
   pull_request:
     branches: [main]
@@ -34,14 +34,14 @@ on:
       # to one of them can turn this workflow red without touching any .go file:
       # deploy/k8s/deploy_consistency_test.go walks deploy/, scripts/, doc/runbook/
       # and the workflow files; internal/pkg/migration reads migrations/;
-      # internal/pkg/gates and the router contract gates read web/src/.
+      # the router contract gates read web/next/src/.
       # deploy/k8s/deploy_consistency_test.go TestGoCIPathsCoverWhatGoTestsRead
       # fails when a directory in that set is missing from this list.
       - 'deploy/**'
       - 'migrations/**'
       - 'scripts/**'
       - 'doc/runbook/**'
-      - 'web/src/**'
+      - 'web/next/src/**'
       - '.env.example'
 
 # A push that supersedes an in-flight run of the same branch should cancel it:
@@ -84,11 +84,11 @@ jobs:
       - name: Stub web/dist for //go:embed in web/embed.go
         # The Go binary embeds web/dist via //go:embed (see web/embed.go).
         # Production builds run `bun run build` to populate dist; for a
-        # Go-only verify, a placeholder dist/index.html satisfies the embed
+        # Go-only verify, a placeholder dist/next/index.html satisfies the embed
         # without paying the frontend build cost.
         run: |
-          mkdir -p web/dist
-          echo '<!doctype html><title>stub</title>' > web/dist/index.html
+          mkdir -p web/dist/next
+          echo '<!doctype html><title>stub</title>' > web/dist/next/index.html
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.9'
@@ -200,8 +200,8 @@ jobs:
           rmdir _sibling
       - name: Stub web/dist for //go:embed in web/embed.go
         run: |
-          mkdir -p web/dist
-          echo '<!doctype html><title>stub</title>' > web/dist/index.html
+          mkdir -p web/dist/next
+          echo '<!doctype html><title>stub</title>' > web/dist/next/index.html
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.9'
@@ -380,11 +380,11 @@ jobs:
       - name: Stub web/dist for //go:embed in web/embed.go
         # The Go binary embeds web/dist via //go:embed (see web/embed.go).
         # Production builds run `bun run build` to populate dist; for a
-        # Go-only verify, a placeholder dist/index.html satisfies the embed
+        # Go-only verify, a placeholder dist/next/index.html satisfies the embed
         # without paying the frontend build cost.
         run: |
-          mkdir -p web/dist
-          echo '<!doctype html><title>stub</title>' > web/dist/index.html
+          mkdir -p web/dist/next
+          echo '<!doctype html><title>stub</title>' > web/dist/next/index.html
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.9'
@@ -418,8 +418,8 @@ jobs:
           rmdir _sibling
       - name: Stub web/dist for //go:embed in web/embed.go
         run: |
-          mkdir -p web/dist
-          echo '<!doctype html><title>stub</title>' > web/dist/index.html
+          mkdir -p web/dist/next
+          echo '<!doctype html><title>stub</title>' > web/dist/next/index.html
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.9'
@@ -473,8 +473,8 @@ jobs:
           rmdir _sibling
       - name: Stub web/dist for //go:embed in web/embed.go
         run: |
-          mkdir -p web/dist
-          echo '<!doctype html><title>stub</title>' > web/dist/index.html
+          mkdir -p web/dist/next
+          echo '<!doctype html><title>stub</title>' > web/dist/next/index.html
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.9'
@@ -528,8 +528,8 @@ jobs:
           rmdir _sibling
       - name: Stub web/dist for //go:embed in web/embed.go
         run: |
-          mkdir -p web/dist
-          echo '<!doctype html><title>stub</title>' > web/dist/index.html
+          mkdir -p web/dist/next
+          echo '<!doctype html><title>stub</title>' > web/dist/next/index.html
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.9'
@@ -592,8 +592,8 @@ jobs:
           rmdir _sibling
       - name: Stub web/dist for //go:embed in web/embed.go
         run: |
-          mkdir -p web/dist
-          echo '<!doctype html><title>stub</title>' > web/dist/index.html
+          mkdir -p web/dist/next
+          echo '<!doctype html><title>stub</title>' > web/dist/next/index.html
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.9'
@@ -719,8 +719,8 @@ jobs:
           rmdir _sibling
       - name: Stub web/dist for //go:embed in web/embed.go
         run: |
-          mkdir -p web/dist
-          echo '<!doctype html><title>stub</title>' > web/dist/index.html
+          mkdir -p web/dist/next
+          echo '<!doctype html><title>stub</title>' > web/dist/next/index.html
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.9'
@@ -803,8 +803,8 @@ jobs:
           rmdir _sibling
       - name: Stub web/dist for //go:embed in web/embed.go
         run: |
-          mkdir -p web/dist
-          echo '<!doctype html><title>stub</title>' > web/dist/index.html
+          mkdir -p web/dist/next
+          echo '<!doctype html><title>stub</title>' > web/dist/next/index.html
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.9'

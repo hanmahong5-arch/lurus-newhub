@@ -31,9 +31,9 @@ function positiveNumber(value: unknown): number | null {
 }
 
 /**
- * Build the display config from a /api/status payload. Mirrors the legacy
- * console's getCurrencyConfig (web/src/helpers/render.jsx): USD (and the
- * LUTE variant, which that console also draws with "$") -> "$" x1,
+ * Build the display config from a /api/status payload. Same rules the
+ * retired legacy console's getCurrencyConfig applied: USD (and the LUTE
+ * variant, also drawn with "$") -> "$" x1,
  * CNY -> "¥" x usd_exchange_rate, CUSTOM -> custom symbol x custom rate,
  * TOKENS -> raw quota. Returns null when the unit price is missing/invalid,
  * or when the chosen currency lacks its rate.

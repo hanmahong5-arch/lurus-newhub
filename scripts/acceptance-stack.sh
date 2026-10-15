@@ -2,13 +2,13 @@
 # Real-chain acceptance on a local full stack: PostgreSQL 16 + Redis + the
 # real binary with its real migrations + the fake vendor and fake platform
 # wallet (cmd/fakeupstream), then the executable acceptance scenarios
-# (web/tests/acceptance) against it, then the meta-gate that refuses a hollow
+# (web/next/acceptance) against it, then the meta-gate that refuses a hollow
 # run.
 #
 #   bash scripts/acceptance-stack.sh            # build, start, run, tear down
 #   ACCEPT_KEEP=1 bash scripts/acceptance-stack.sh   # leave the stack up after
 #   ACCEPT_UP_ONLY=1 bash scripts/acceptance-stack.sh # start it, write
-#       web/acceptance-report/stack.env, run nothing, leave it up
+#       web/next/acceptance-report/stack.env, run nothing, leave it up
 #
 # Linux only (the self-hosted CI runner and WSL). Needs go, bun, curl, and
 # docker unless both ACCEPT_SQL_DSN and ACCEPT_REDIS_URL are given (CI passes
@@ -25,7 +25,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/newhub-accept.XXXXXX")"
-REPORT_DIR="$REPO_ROOT/web/acceptance-report"
+REPORT_DIR="$REPO_ROOT/web/next/acceptance-report"
 mkdir -p "$REPORT_DIR"
 CONTAINERS=()
 PIDS=()
@@ -139,12 +139,12 @@ log "redis:    $REDIS_URL"
 # --- 2. Build -----------------------------------------------------------------
 # The SPA is embedded (//go:embed all:dist); the console steps need the real
 # one, not CI's stub page.
-if [ "${ACCEPT_SKIP_WEB_BUILD:-}" != 1 ] && ! ls web/dist/assets/*.js >/dev/null 2>&1; then
-  log "building web/dist"
-  (cd web && bun install --frozen-lockfile >/dev/null && bun run build >"$WORK/web-build.log" 2>&1) \
+if [ "${ACCEPT_SKIP_WEB_BUILD:-}" != 1 ] && ! ls web/dist/next/static/js/*.js >/dev/null 2>&1; then
+  log "building web/dist/next"
+  (cd web/next && bun install --frozen-lockfile >/dev/null && bun run build >"$WORK/web-build.log" 2>&1) \
     || { tail -n 40 "$WORK/web-build.log" >&2; die "web build failed"; }
 fi
-[ -f web/dist/index.html ] || die "web/dist/index.html missing (set ACCEPT_SKIP_WEB_BUILD only when dist is already built)"
+[ -f web/dist/next/index.html ] || die "web/dist/next/index.html missing (set ACCEPT_SKIP_WEB_BUILD only when dist is already built)"
 VERSION="$(cat VERSION 2>/dev/null || true)"
 VERSION="${VERSION:-dev}-accept-$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
 log "building lurus-api ($VERSION) and fakeupstream"
@@ -211,10 +211,10 @@ export ACCEPT_PG_CONTAINER=$PG_CONTAINER ACCEPT_SQL_DSN='$SQL_DSN'
 ENV
 if [ "${ACCEPT_UP_ONLY:-}" = 1 ]; then
   ACCEPT_KEEP=1
-  log "up: source web/acceptance-report/stack.env; logs in $WORK"
+  log "up: source web/next/acceptance-report/stack.env; logs in $WORK"
   exit 0
 fi
-cd web
+cd web/next
 [ -d node_modules ] || bun install --frozen-lockfile >/dev/null
 export ACCEPT_TARGET=local ACCEPT_BASE_URL="$BASE_URL" ACCEPT_BRIDGE_TOKEN="$BRIDGE_TOKEN"
 export ACCEPT_FAKE_URL="$FAKE_URL" ACCEPT_VENDOR_KEY="$VENDOR_KEY"

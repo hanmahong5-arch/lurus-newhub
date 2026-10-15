@@ -731,7 +731,7 @@ var goCIPathDependencies = []struct {
 	{"deploy/**", "deploy/k8s/deploy_consistency_test.go", `"deploy"`},
 	{"scripts/**", "deploy/k8s/deploy_consistency_test.go", `"scripts"`},
 	{"doc/runbook/**", "deploy/k8s/deploy_consistency_test.go", `"doc/runbook"`},
-	{"web/src/**", "internal/adapter/handler/router/frontend_route_contract_test.go", `"web", "src"`},
+	{"web/next/src/**", "internal/adapter/handler/router/frontend_route_contract_test.go", `"web", "next", "src"`},
 	{"migrations/**", "migrations/embed.go", "//go:embed *.sql"},
 	// Not a directory: TestManifestEnvVarsAreDocumented (this file) reads
 	// .env.example, so editing it alone can turn Go CI red.

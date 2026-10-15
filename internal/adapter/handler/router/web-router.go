@@ -38,9 +38,6 @@ const nextMountPrefix = "/next"
 // immutable, and a miss under it must be a 404 rather than the SPA document.
 const nextAssetURLPrefix = nextMountPrefix + "/static/"
 
-// nextIndexFile is the new console's document inside dist.
-const nextIndexFile = "next/index.html"
-
 // isHashedAssetPath reports whether a URL path is one of the two
 // content-addressed build output directories.
 func isHashedAssetPath(urlPath string) bool {
@@ -53,24 +50,70 @@ func isNextPath(urlPath string) bool {
 	return urlPath == nextMountPrefix || strings.HasPrefix(urlPath, nextMountPrefix+"/")
 }
 
-// legacyOwnedPrefixes are the routes the legacy (Semi UI) console still
-// serves after the new console took over the site root. Since the sign-in
-// flow (/login, /bridge-login, /oauth/oidc, /setup, ...) moved into the new
-// console, only /console/* is left: old bookmarks and the e2e suite's
-// direct links. The new console links nothing there.
-var legacyOwnedPrefixes = []string{
-	"/console",
+// classicConsolePages maps the retired legacy console's pages (everything it
+// served under /console) onto the console that replaced it, so bookmarks and
+// links pasted into tickets keep landing on the same page. Anything not
+// listed goes to the dashboard.
+var classicConsolePages = map[string]string{
+	"/console/v2/dashboard":               "/dashboard",
+	"/console/v2/token":                   "/keys",
+	"/console/v2/log":                     "/usage-logs",
+	"/console/v2/tasks":                   "/tasks",
+	"/console/v2/playground":              "/playground",
+	"/console/v2/chat":                    "/chat",
+	"/console/v2/billing":                 "/wallet",
+	"/console/v2/settings":                "/account",
+	"/console/v2/models":                  "/models",
+	"/console/v2/channel":                 "/ops/channels",
+	"/console/v2/flows":                   "/org/flows",
+	"/console/v2/pricing":                 "/org/pricing",
+	"/console/v2/redemption":              "/admin/redemption-codes",
+	"/console/v2/projects":                "/org/departments",
+	"/console/v2/tenants":                 "/admin/tenants",
+	"/console/v2/admin/users":             "/admin/users",
+	"/console/v2/admin/settings":          "/admin/settings",
+	"/console/v2/admin/rankings":          "/rankings",
+	"/console/v2/admin/audit":             "/usage-logs/audit",
+	"/console/v2/admin/model-limits":      "/admin/model-limits",
+	"/console/v2/admin/authz":             "/admin/authz",
+	"/console/v2/admin/model-pools":       "/admin/model-pools",
+	"/console/v2/admin/gateway":           "/ops/overview",
+	"/console/v2/admin/cost-intelligence": "/admin/cost-intelligence",
+	"/console/v2/admin/model-performance": "/admin/model-performance",
+	"/console/v2/admin/system-tasks":      "/admin/system-tasks",
+	"/console/v2/admin/diagnostics":       "/admin/diagnostics",
+	"/console/v2/account-disabled":        "/account-disabled",
+	"/console/setting":                    "/admin/settings",
+	"/console/personal":                   "/account",
+	"/console/user":                       "/admin/users",
+	"/console/openrouter-sync":            "/admin/openrouter-sync",
+	"/console/token":                      "/keys",
+	"/console/log":                        "/usage-logs",
+	"/console/topup":                      "/wallet",
+	"/console/redemption":                 "/admin/redemption-codes",
+	"/console/channel":                    "/ops/channels",
+	"/console/models":                     "/models",
+	"/console/playground":                 "/playground",
+	"/console/chat":                       "/chat",
+	"/console/task":                       "/tasks",
+	"/console/midjourney":                 "/tasks",
 }
 
-// isLegacyPath reports whether the legacy console serves a URL path: one of
-// legacyOwnedPrefixes exactly, or anything below it ("/consolex" is not).
-func isLegacyPath(urlPath string) bool {
-	for _, prefix := range legacyOwnedPrefixes {
-		if urlPath == prefix || strings.HasPrefix(urlPath, prefix+"/") {
-			return true
+// isClassicConsolePath reports whether a URL path belongs to the retired
+// legacy console: exactly /console or anything under /console/.
+func isClassicConsolePath(urlPath string) bool {
+	return urlPath == "/console" || strings.HasPrefix(urlPath, "/console/")
+}
+
+// classicConsoleTarget is where an old /console/... URL now lives. A deeper
+// path (/console/chat/12) resolves through its nearest listed ancestor.
+func classicConsoleTarget(urlPath string) string {
+	for p := strings.TrimSuffix(urlPath, "/"); strings.HasPrefix(p, "/console/"); p = path.Dir(p) {
+		if target, ok := classicConsolePages[p]; ok {
+			return target
 		}
 	}
-	return false
+	return "/dashboard"
 }
 
 // nextBookmarkTarget maps an old /next/... URL onto the same page at the site
@@ -84,22 +127,6 @@ func nextBookmarkTarget(urlPath, rawQuery string) string {
 		target += "?" + rawQuery
 	}
 	return target
-}
-
-// readNextIndex loads the new console's document from the embedded build.
-// It returns nil when the build has no next/index.html — the Go CI jobs stub
-// web/dist down to a single index.html, and a legacy-only build is a valid
-// deployment — and the caller then serves the legacy document everywhere
-// instead of failing.
-func readNextIndex(distFS fs.FS) []byte {
-	if distFS == nil {
-		return nil
-	}
-	data, err := fs.ReadFile(distFS, nextIndexFile)
-	if err != nil || len(data) == 0 {
-		return nil
-	}
-	return data
 }
 
 // staticAssetCacheControl repeats what middleware.Cache() puts on every path
@@ -380,11 +407,6 @@ func setWebRoutes(router *gin.Engine, distFS fs.FS, staticFS static.ServeFileSys
 	// as router.Use did).
 	spaDocumentRateLimit := middleware.GlobalWebRateLimit()
 
-	// Read once at mount: the embedded build cannot change under a running
-	// binary. nil = no new-console build in this binary; every page then falls
-	// back to the legacy document (see readNextIndex).
-	nextIndexPage := readNextIndex(distFS)
-
 	router.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.RequestURI, "/v1") || strings.HasPrefix(c.Request.RequestURI, "/api") || strings.HasPrefix(c.Request.RequestURI, "/assets") ||
 			strings.HasPrefix(c.Request.URL.Path, nextAssetURLPrefix) {
@@ -407,21 +429,19 @@ func setWebRoutes(router *gin.Engine, distFS fs.FS, staticFS static.ServeFileSys
 		if c.IsAborted() {
 			return
 		}
-		// The new console owns the site root; the legacy console keeps the
-		// sign-in flow and /console/*. A binary built without the new console
-		// (the Go CI jobs stub web/dist) serves the legacy document everywhere,
-		// as before the cutover.
-		if nextIndexPage != nil {
-			urlPath := c.Request.URL.Path
-			if isNextPath(urlPath) {
-				c.Redirect(http.StatusFound, nextBookmarkTarget(urlPath, c.Request.URL.RawQuery))
-				return
-			}
-			if !isLegacyPath(urlPath) {
-				c.Data(http.StatusOK, "text/html; charset=utf-8", nextIndexPage)
-				return
-			}
+		// Old URLs: the console's former /next/ mount and the retired legacy
+		// console's /console/ pages both redirect to where the page lives now.
+		urlPath := c.Request.URL.Path
+		if isNextPath(urlPath) {
+			c.Redirect(http.StatusFound, nextBookmarkTarget(urlPath, c.Request.URL.RawQuery))
+			return
 		}
+		if isClassicConsolePath(urlPath) {
+			c.Redirect(http.StatusFound, classicConsoleTarget(urlPath))
+			return
+		}
+		// Everything else is the console's document; its client router
+		// resolves the path (and renders its own 404).
 		c.Data(http.StatusOK, "text/html; charset=utf-8", indexPage)
 	})
 }

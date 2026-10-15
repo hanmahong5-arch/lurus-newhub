@@ -118,5 +118,13 @@
   "Total:": "合计：",
   "Week": "周",
   "Unknown model": "未知模型",
-  "Unknown": "未知"
+  "Unknown": "未知",
+  "Service status": "服务状态",
+  "{{up}} of {{total}} monitors up": "{{total}} 个监控中 {{up}} 个正常",
+  "Could not load service status.": "无法加载服务状态。",
+  "24-hour availability": "24 小时可用率",
+  "Up": "正常",
+  "Down": "不可用",
+  "Degraded": "降级",
+  "Maintenance": "维护中"
 }

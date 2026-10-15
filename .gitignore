@@ -8,6 +8,10 @@ build
 *.db-journal
 logs
 web/dist
+# Left behind by the retired legacy console package (web/package.json) in
+# checkouts that installed it; the console's own node_modules is ignored in
+# web/next/.gitignore.
+web/node_modules
 .env
 # 挡住 .env.bak-YYYY 这类含活凭证的手工备份被 git add -A 吸走(.env.example 均已 tracked 不受影响)
 .env.*

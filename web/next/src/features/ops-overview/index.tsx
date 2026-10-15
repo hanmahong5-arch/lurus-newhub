@@ -15,6 +15,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { TitledCard } from '@/components/ui/titled-card'
+import { useUserAccess } from '@/hooks/use-admin'
 import { formatQuota } from '@/lib/money'
 import { useMoneyConfig } from '@/lib/status'
 
@@ -27,6 +28,7 @@ import {
   unroutable,
   windowNearLimit,
 } from './lib/derive'
+import { GatewayHealthCard } from './gateway-health'
 import { modelStatusQuery, probesQuery, usageSummaryQuery } from './lib/api'
 import type { ChannelProbe, ModelState, SummaryChannel } from './lib/types'
 
@@ -417,6 +419,7 @@ function HealthSections() {
 
 export function OpsOverviewPage() {
   const { t } = useTranslation()
+  const { isPlatformRoot } = useUserAccess()
   const summary = useQuery(usageSummaryQuery)
 
   let usage: ReactNode
@@ -453,6 +456,7 @@ export function OpsOverviewPage() {
         {usage}
       </TitledCard>
       <HealthSections />
+      {isPlatformRoot && <GatewayHealthCard />}
       <TitledCard
         title={t('Public model status')}
         description={t('What the public status page shows')}

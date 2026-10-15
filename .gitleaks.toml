@@ -140,10 +140,9 @@ paths = [
   '''(^|/)playwright-report/''',
   '''(^|/)test-results/''',
   # UI translation strings — key/value pairs like "Discord Client Secret":
-  # "Discord Client Secret" are i18n labels, not credentials.
-  '''(^|/)web/src/i18n/locales/''',
-  # Same for the new console: shared and per-feature catalogs ("Per token":
-  # "Per token" tripped k8s-literal-password on the key suffix).
+  # "Discord Client Secret" are i18n labels, not credentials. The console's
+  # shared and per-feature catalogs ("Per token": "Per token" tripped
+  # k8s-literal-password on the key suffix).
   '''(^|/)web/next/src/i18n/locales/''',
   '''(^|/)web/next/src/features/[^/]+/locales/''',
   # local/dev-only env files with fixed weak dev passwords (root:123456 etc);

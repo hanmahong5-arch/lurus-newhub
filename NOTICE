@@ -33,7 +33,7 @@ The compiled binary and frontend bundle include open-source components that
 remain licensed under their own upstream terms. The authoritative license text
 for each ships inside that dependency's source (Go module cache / node_modules).
 The identifiers below are a convenience summary of the principal components and
-are not exhaustive; see go.mod / go.sum and web/package.json for the full set.
+are not exhaustive; see go.mod / go.sum and web/next/package.json for the full set.
 
 --- Backend (Go) ---
 

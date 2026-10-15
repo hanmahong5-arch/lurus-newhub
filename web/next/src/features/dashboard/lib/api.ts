@@ -30,6 +30,7 @@ import type {
   QuotaRow,
   RealtimeLogs,
   TrendData,
+  UptimeGroup,
 } from './types'
 
 /**
@@ -110,4 +111,27 @@ export async function fetchNotice(): Promise<string> {
     skipAuthRedirect: true,
   })
   return typeof d === 'string' ? d.trim() : ''
+}
+
+/**
+ * The Uptime Kuma groups the operator configured, with each monitor's latest
+ * heartbeat. Public route; an unconfigured site answers an empty list. A
+ * failed read throws, so it is never mistaken for "nothing configured".
+ */
+export async function fetchUptimeStatus(): Promise<UptimeGroup[]> {
+  const d = await api.get<unknown>('/api/uptime/status', {
+    skipAuthRedirect: true,
+  })
+  if (!Array.isArray(d)) return []
+  return d
+    .filter(
+      (g): g is UptimeGroup =>
+        typeof g === 'object' && g !== null && Array.isArray(g.monitors)
+    )
+    .map((g) => ({
+      categoryName: typeof g.categoryName === 'string' ? g.categoryName : '',
+      monitors: g.monitors.filter(
+        (m) => typeof m === 'object' && m !== null && typeof m.name === 'string'
+      ),
+    }))
 }

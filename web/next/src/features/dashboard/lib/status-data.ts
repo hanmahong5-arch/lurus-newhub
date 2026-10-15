@@ -44,10 +44,12 @@ export function useConsolePanels() {
   const { status, loading } = useStatus()
   const announcementsEnabled = status?.announcements_enabled === true
   const faqEnabled = status?.faq_enabled === true
+  const uptimeEnabled = status?.uptime_kuma_enabled === true
   return {
     loading,
     announcementsEnabled,
     faqEnabled,
+    uptimeEnabled,
     announcements: announcementsEnabled
       ? asList(status?.announcements, isAnnouncement)
       : [],

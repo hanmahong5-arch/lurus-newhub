@@ -2,32 +2,22 @@ FROM node:22-slim AS node
 
 FROM oven/bun:latest AS builder
 # bun stays the package manager and script runner. The node binary is here
-# only so that `bun run build` executes vite under node (vite's bin has a
-# node shebang; without a node on PATH bun runs it itself). Under bun the
-# build peaked at 6.5G RSS, measured, and was OOM-killed on the 6-7G CI
-# runners; under node it peaks at ~3.2G. NODE_OPTIONS gives node the ~4G
-# heap it would size for itself on a 16G host instead of deriving a smaller
-# one from the container's cgroup.
+# so that `bun run build` executes the bundler under node (its bin has a node
+# shebang; without a node on PATH bun runs it itself), which keeps peak memory
+# well inside the CI runners. NODE_OPTIONS gives node the ~4G heap it would
+# size for itself on a 16G host instead of deriving a smaller one from the
+# container's cgroup.
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 
-WORKDIR /build
-COPY web/package.json .
-COPY web/bun.lock .
-RUN bun install
-# The new console (web/next, served under /next/) has its own dependency tree.
-# Its manifest and lockfile are copied alone first so this install layer is
-# cached until they change, not on every source edit.
+# The console (web/next). Its manifest and lockfile are copied alone first so
+# the install layer is cached until they change, not on every source edit. The
+# build writes /build/dist/next (web/next/rsbuild.config.ts); web/embed.go
+# embeds the whole of dist via all:dist.
 WORKDIR /build/next
 COPY web/next/package.json web/next/bun.lock ./
 RUN bun install --frozen-lockfile
-WORKDIR /build
-COPY ./web .
-COPY ./VERSION .
-RUN DISABLE_ESLINT_PLUGIN='true' NODE_OPTIONS=--max-old-space-size=4096 VITE_REACT_APP_VERSION=$(cat VERSION) bun run build
-# Order matters: the legacy vite build empties /build/dist, and the new
-# console writes into /build/dist/next (web/next/rsbuild.config.ts), so it
-# must run second. web/embed.go embeds the whole of dist via all:dist.
-RUN cd next && NODE_OPTIONS=--max-old-space-size=4096 bun run build
+COPY ./web/next .
+RUN NODE_OPTIONS=--max-old-space-size=4096 bun run build
 
 FROM golang:1.26-alpine AS builder2
 ENV GO111MODULE=on CGO_ENABLED=0

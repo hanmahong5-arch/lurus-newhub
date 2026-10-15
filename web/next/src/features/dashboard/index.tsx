@@ -37,6 +37,7 @@ import {
   TrendPanel,
 } from './components/panels'
 import { RankingsPanel } from './components/rankings-panel'
+import { UptimePanel } from './components/uptime-panel'
 import { fetchRealtimeLogs, fetchTrend } from './lib/api'
 import { useConsolePanels } from './lib/status-data'
 import { loadState, type LoadState } from './lib/state'
@@ -116,6 +117,7 @@ function OverviewSection() {
         data={live.data}
         onRetry={() => void live.refetch()}
       />
+      <UptimePanel />
       {showRankings && <RankingsPanel />}
       <div className='grid gap-4 lg:grid-cols-3'>
         {showTrend && (

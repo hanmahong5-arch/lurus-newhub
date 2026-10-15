@@ -1,6 +1,6 @@
 name: Acceptance (real chain)
 
-# The executable business acceptance suite (web/tests/acceptance) against a
+# The executable business acceptance suite (web/next/acceptance) against a
 # full local stack: PostgreSQL 16 + Redis + the real binary with its real
 # migrations, r6-stage's environment, and cmd/fakeupstream standing in for
 # the LLM vendors and the platform wallet. Every money assertion is exact and
@@ -19,12 +19,13 @@ on:
       - 'go.mod'
       - 'go.sum'
       - 'migrations/**'
-      - 'web/src/**'
-      - 'web/tests/acceptance/**'
-      - 'web/playwright.acceptance.config.ts'
-      - 'web/scripts/acceptance-meta-gate*.mjs'
-      - 'web/package.json'
-      - 'web/bun.lock'
+      - 'web/embed.go'
+      - 'web/next/src/**'
+      - 'web/next/acceptance/**'
+      - 'web/next/playwright.acceptance.config.ts'
+      - 'web/next/scripts/acceptance-meta-gate*.mjs'
+      - 'web/next/package.json'
+      - 'web/next/bun.lock'
       - 'scripts/acceptance-stack.sh'
       - '.github/workflows/acceptance.yml'
   push:
@@ -34,12 +35,13 @@ on:
       - 'go.mod'
       - 'go.sum'
       - 'migrations/**'
-      - 'web/src/**'
-      - 'web/tests/acceptance/**'
-      - 'web/playwright.acceptance.config.ts'
-      - 'web/scripts/acceptance-meta-gate*.mjs'
-      - 'web/package.json'
-      - 'web/bun.lock'
+      - 'web/embed.go'
+      - 'web/next/src/**'
+      - 'web/next/acceptance/**'
+      - 'web/next/playwright.acceptance.config.ts'
+      - 'web/next/scripts/acceptance-meta-gate*.mjs'
+      - 'web/next/package.json'
+      - 'web/next/bun.lock'
       - 'scripts/acceptance-stack.sh'
       - '.github/workflows/acceptance.yml'
   workflow_dispatch:
@@ -83,13 +85,13 @@ jobs:
         with:
           bun-version: '1.3.10'
       - name: Install web dependencies and Chromium
-        working-directory: web
+        working-directory: web/next
         # No --with-deps on the self-hosted pool: it is rootless (see web-ci.yml).
         run: |
           bun install --frozen-lockfile
           bunx playwright install $([ "$RUNNER_ENVIRONMENT" = self-hosted ] || echo --with-deps) chromium
       - name: Meta-gate self-test
-        working-directory: web
+        working-directory: web/next
         run: bun scripts/acceptance-meta-gate.test.mjs
       - name: Build, start the stack, run the scenarios, apply the meta-gate
         run: bash scripts/acceptance-stack.sh
@@ -98,6 +100,6 @@ jobs:
         with:
           name: acceptance-report
           path: |
-            web/acceptance-report/
-            !web/acceptance-report/.state/
+            web/next/acceptance-report/
+            !web/next/acceptance-report/.state/
           retention-days: 14

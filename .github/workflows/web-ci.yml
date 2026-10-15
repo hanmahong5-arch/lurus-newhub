@@ -44,62 +44,15 @@ concurrency:
 
 defaults:
   run:
-    working-directory: web
+    working-directory: web/next
 
 jobs:
-  test:
-    name: Lint + Typecheck + Vitest
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: '1.3.10'
-      - run: bun install --frozen-lockfile
-      - run: bun run lint
-      - run: bun run eslint
-      # Runs the full vitest suite AND enforces the coverage ratchet declared in
-      # web/vitest.config.js (`coverage.thresholds`). Vitest exits non-zero when a
-      # threshold is breached, so a coverage regression fails the job. Replaces the
-      # bare `bun run test` — same tests, plus the gate; running both would double
-      # the suite for no extra signal.
-      - run: bun run test:coverage
-      - name: snake_case casing gate
-        run: bun run check:casing
-      # The budget gate in the build job is only worth its exit code if it can
-      # actually fail; this drives it over synthetic dist trees (over budget,
-      # under budget, a budget grown so loose it holds nothing, and the two
-      # shapes of a broken measurement). It needs no dist of its own.
-      - name: bundle budget script self-test
-        run: bun scripts/bundle-budget.test.mjs
-
-  build:
-    name: Vite build
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
-    timeout-minutes: 30
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: '1.3.10'
-      - run: bun install --frozen-lockfile
-      - run: bun run build
-      # First-paint transfer budget (web/bundle-budget.json). The entry chunk
-      # reached 6.57 MB one import at a time with nothing watching; this reads
-      # the dist that was just built and fails the job when a measurement goes
-      # over its declared budget. Raising a budget is allowed — in the commit
-      # that earns it, with the reason.
-      - name: bundle budget gate
-        run: bun scripts/check-bundle-budget.mjs
-
   next-console:
-    name: New console (web/next) lint + typecheck + vitest + build
+    name: Console (web/next) lint + typecheck + vitest + build
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 30
-    # web/next is a separate package (rsbuild + TypeScript, served under
-    # /next/); it has its own lockfile and is not part of web/'s install.
+    # web/next is the console (rsbuild + TypeScript). It owns the site root;
+    # its build assets are served under /next/.
     defaults:
       run:
         working-directory: web/next
@@ -112,8 +65,8 @@ jobs:
       - run: bun run typecheck
       - run: bun run lint
       - run: bun run test
-      # Writes web/dist/next (outDir is ../dist/next). The legacy build job
-      # above empties web/dist, so in the image the order is legacy first.
+      # Writes web/dist/next (outDir is ../dist/next), which web/embed.go
+      # embeds (IndexPage is dist/next/index.html).
       - run: bun run build
       - name: build output is where the Go server expects it
         run: test -f ../dist/next/index.html
@@ -148,42 +101,13 @@ jobs:
           bun-version: '1.3.10'
       - run: bun install --frozen-lockfile
       - name: bun audit (blocking — high+ acceptable, critical blocks)
-        # 2026-05-26 Wave-Phase H1 cleanup landed: bun audit went from
-        # 87 vuln (1 crit, 26 high, 55 mod, 5 low) to 0 crit / 0 high / 7 mod / 0 low
-        # via `overrides` block in web/package.json (minimist, lodash, js-cookie,
-        # immutable, glob/minimatch/picomatch/brace-expansion, rollup, @remix-run/router,
-        # protocol-buffers-schema, prismjs, yaml, geojson-flatten) + axios direct bump
-        # 1.12.0 -> 1.16.1 (same major, non-breaking). Major bumps (react 19, vite 8,
-        # tailwind 4, eslint 10, typescript 6, react-router 7, lucide-react 1.x,
-        # @douyinfe/semi 2.99, marked 18, i18next 26) were deliberately deferred —
-        # they break the build/eslint config and need their own focused stories.
-        #
-        # 2026-08-17: the "0 high / 7 moderate" line above was a 2026-05-26
-        # snapshot and had gone badly stale — nothing watched it, because this
-        # gate only blocks on `critical`. Re-measured on this lockfile against
-        # the npmjs registry: 83 vulnerabilities (0 critical, 20 HIGH, 56
-        # moderate, 7 low). Ten packages had drifted back in-range, several of
-        # them pinned by the `overrides` block itself (immutable was pinned at
-        # 5.1.5, which the new advisory covers).
-        #
-        # Overrides refreshed in the same change — all within-major, no build
-        # break: immutable 5.1.5->5.1.9, @isaacs/brace-expansion 5.0.1->5.0.9,
-        # axios 1.16.1->1.19.0 (direct dep), and new pins for undici 7.29.0,
-        # form-data 4.0.6, flatted 3.4.4, js-yaml 4.3.1, nanoid 3.3.18,
-        # postcss 8.5.26. Measured after: 45 vulnerabilities (0 critical,
-        # 2 high, 38 moderate, 5 low) — 20 high -> 2.
-        #
-        # The 2 remaining highs are both GHSA-fx2h-pf6j-xcff (vite
-        # `server.fs.deny` bypass, dev-server only, not in the shipped bundle).
-        # Fixing it needs vite >6.4.2, i.e. the vite 5 -> 8 major bump that is
-        # deliberately deferred above. So the gate stays at `critical`:
-        # `--audit-level high` still exits 1 (verified), `--audit-level
-        # critical` exits 0. Ratchet to `high` in the PR that lands the vite
-        # major — re-run `bun audit` and see 0 high first, do not assume.
-        #
-        # A plain `brace-expansion` override was tried and reverted: it is not
-        # needed once @isaacs/brace-expansion is current, and forcing 5.x onto
-        # minimatch-1.x consumers is a risk with no payoff.
+        # The console package (web/next). Until the legacy console was retired
+        # this job audited only web/ — web/next had never been audited and
+        # carried 2 critical advisories (seroval via @tanstack/router-core,
+        # proxy-addr via the shadcn CLI's MCP SDK), both pinned past the fix
+        # in web/next/package.json `overrides`. The gate stays at `critical`
+        # (33 high remain, mostly dev tooling); ratchet to `high` once a run
+        # of `bun audit` shows 0 high — re-run it, do not assume.
         run: bun audit --audit-level critical
       - name: gitleaks (secret scanning)
         uses: gitleaks/gitleaks-action@v2
@@ -204,7 +128,7 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' && github.event.inputs.run_e2e == 'true') ||
       github.event_name == 'schedule'
-    needs: test
+    needs: next-console
     # Only the deploy-verify follow-up comment step below needs this; the
     # nightly schedule run posts nothing and this permission is a no-op for it.
     permissions:
@@ -235,10 +159,10 @@ jobs:
         # handful of skipped specs. The suite has been 33 passed / 1 legit skip
         # (x2 browsers) since 2026-08-30, so a run that passes fewer than 30 or
         # skips more than 2 has stopped being the nightly proof it is kept for.
-        # results.json is written by the json reporter in web/playwright.config.ts.
+        # results.json is written by the json reporter in web/next/playwright.config.ts.
         if: always()
         run: |
-          report=playwright-report/results.json  # job default working-directory is web/
+          report=playwright-report/results.json  # job default working-directory is web/next/
           if [ ! -f "$report" ]; then
             echo "::error::$report is missing — the json reporter did not run, so the counts below cannot be checked. Do not read a green step as a green suite."
             exit 1
@@ -272,7 +196,7 @@ jobs:
         if: always()
         with:
           name: playwright-report
-          path: web/playwright-report/
+          path: web/next/playwright-report/
           retention-days: 14
 
       # Closes the post-deploy verification loop's second half: verify_rollout

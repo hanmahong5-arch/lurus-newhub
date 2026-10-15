@@ -32,12 +32,12 @@ cp .env.example .env                # fill in SQL_DSN and SESSION_SECRET (both r
 go run ./cmd/server                  # listens on :3000 (PORT)
 
 # --- Frontend console (Bun; web/ has its own package.json) ---
-cd web && bun install && bun run dev # :5173, proxies API calls to :3000
+cd web/next && bun install && bun run dev # console dev server, proxies API calls to :3000
 
 # --- Tests ---
 go test -short ./...                 # unit only, skips integration (testing.Short())
 go test -short -race -count=1 -timeout=15m ./...  # CI's required merge gate (.github/workflows/go-ci.yml)
-cd web && bun run test && bun run lint && bun run eslint
+cd web/next && bun run typecheck && bun run lint && bun run test
 
 # --- Docker Compose (self-contained: server + Postgres + Redis) ---
 docker-compose up -d                 # http://localhost:3000
@@ -68,7 +68,7 @@ internal/
 │   └── provider/            # per-vendor adapters (openai/, claude/, gemini/, aws/, baidu/, …)
 ├── lifecycle/             # leader election, graceful shutdown, secret rotation
 └── pkg/                   # config, logger, metrics, tracing, search, migration, nats, resilience
-web/                       # React 18 + Vite + Semi UI console (Bun; 6 locales, see web/src/i18n/locales/)
+web/next/                  # console: React 19 + TanStack + shadcn/Tailwind 4 + rsbuild (Bun)
 migrations/                # PostgreSQL SQL migrations (001-020 are legacy record-only baselines, some MySQL-only; 021+ is the live PG-only, idempotent lineage)
 deploy/k8s/                # Kubernetes manifests (staging/UAT overlays)
 ```
@@ -122,7 +122,6 @@ or status code can still be wrong.
 
 - Test files follow `*_test.go` / `*_integration_test.go` / `*_benchmark_test.go`; test functions are named `Test<Subject>_<Method>_<Behavior>` and prefer table-driven cases (see [`TESTING.md`](./TESTING.md)).
 - CI enforces a coverage floor per layer, ratcheted upward as coverage improves: `internal/app/` ≥ 86%, `internal/adapter/repo/` ≥ 77%, `internal/adapter/handler/` ≥ 64% (`.github/workflows/go-ci.yml`).
-- `web/` is plain JS, not TypeScript — there is no `typecheck` script; the real frontend gates are `bun run lint` (prettier) and `bun run eslint`.
 - Database schema changes ship as new files under `migrations/`, PostgreSQL-only and idempotent from `021_` onward.
 - Deployment is GitOps: merging to `main` builds and publishes an image, and a separate reconciler converges the cluster state — this repo does not itself drive `kubectl` (see [`DEPLOY.md`](./DEPLOY.md)).
 
