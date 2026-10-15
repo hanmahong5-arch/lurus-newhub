@@ -152,8 +152,12 @@ jobs:
           # which the local pool reaches over a cross-border link that went to
           # a few KB/s for a whole day on 2026-10-01. "|" falls through to the
           # next proxy on ANY error, not just 404/410; vars.CI_GOPROXY wins.
+          # The same link made the final stage's apt run stall for 20+ minutes
+          # on 2026-10-14/15; DEBIAN_MIRROR points it at a domestic mirror
+          # (Dockerfile explains why http); vars.CI_DEBIAN_MIRROR wins.
           build-args: |
             GOPROXY=${{ vars.CI_GOPROXY || 'https://goproxy.cn|https://proxy.golang.org|direct' }}
+            DEBIAN_MIRROR=${{ vars.CI_DEBIAN_MIRROR || 'http://mirrors.aliyun.com' }}
 
       - name: Scan image for HIGH/CRITICAL vulnerabilities (Trivy)
         # BLOCKING gate, absorbed from the deleted build.yaml. ignore-unfixed
