@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	openrouter_sync "github.com/LurusTech/lurus-hub/internal/app/openrouter_sync"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
 	"github.com/gin-gonic/gin"
@@ -39,6 +40,17 @@ func GetOpenRouterApiPoolStatus(c *gin.Context) {
 		DisableReason            string `json:"disable_reason,omitempty"`
 		LastDisabledAt           int64  `json:"last_disabled_at,omitempty"`
 	}
+	// modelProbeStatus is the latest per-model probe outcome for a model that
+	// is not fully healthy. Reason is one of openrouter_sync.Reason*; a
+	// rate_limited model is still Available (transient), a region_blocked one
+	// is not offered until a later probe succeeds.
+	type modelProbeStatus struct {
+		Model       string `json:"model"`
+		Available   bool   `json:"available"`
+		Reason      string `json:"reason"`
+		LastError   string `json:"last_error,omitempty"`
+		LastProbeAt int64  `json:"last_probe_at,omitempty"`
+	}
 	type channelSnapshot struct {
 		ChannelId   int         `json:"channel_id"`
 		ChannelName string      `json:"channel_name"`
@@ -48,6 +60,35 @@ func GetOpenRouterApiPoolStatus(c *gin.Context) {
 		CoolingN    int         `json:"cooling_count"`
 		DisabledN   int         `json:"permanent_disabled_count"`
 		Keys        []keyStatus `json:"keys"`
+		// ModelProbe lists only the models whose last probe was not OK.
+		ModelProbe []modelProbeStatus `json:"model_probe,omitempty"`
+	}
+
+	channelIDs := make([]int, 0, len(channels))
+	for _, ch := range channels {
+		channelIDs = append(channelIDs, ch.Id)
+	}
+	probeByChannel := map[int][]modelProbeStatus{}
+	if len(channelIDs) > 0 {
+		// Best effort: the key view is the primary payload, so a probe-store
+		// read failure degrades to "no model_probe" rather than a 500.
+		rows, herr := repo.ListModelHealth(channelIDs)
+		if herr != nil {
+			common.SysError("GetOpenRouterApiPoolStatus: list model health failed: " + herr.Error())
+		}
+		for _, h := range rows {
+			reason := openrouter_sync.ReasonForHealth(h)
+			if reason == "" {
+				continue
+			}
+			probeByChannel[h.ChannelId] = append(probeByChannel[h.ChannelId], modelProbeStatus{
+				Model:       h.Model,
+				Available:   !h.AutoDisabled,
+				Reason:      reason,
+				LastError:   h.LastError,
+				LastProbeAt: h.LastProbeAt,
+			})
+		}
 	}
 
 	out := make([]channelSnapshot, 0, len(channels))
@@ -59,6 +100,7 @@ func GetOpenRouterApiPoolStatus(c *gin.Context) {
 			Status:      channelStatusLabel(ch.Status),
 			KeyCount:    len(keys),
 			Keys:        make([]keyStatus, 0, len(keys)),
+			ModelProbe:  probeByChannel[ch.Id],
 		}
 		statusList := ch.ChannelInfo.MultiKeyStatusList
 		reasonMap := ch.ChannelInfo.MultiKeyDisabledReason

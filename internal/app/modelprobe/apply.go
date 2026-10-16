@@ -88,7 +88,11 @@ func Apply(prev *entity.ModelHealth, res Result, now time.Time, threshold int) (
 
 	next.ConsecutiveFailures++
 	transition := ""
-	if next.ConsecutiveFailures >= threshold && !next.AutoDisabled {
+	// A region refusal is a property of the model from our egress, not a
+	// flaky upstream: every retry will be refused the same way, so it leaves
+	// routing on the first hit instead of after `threshold` probes.
+	regionRefused := IsRegionRefusal(res.StatusCode, res.Err)
+	if (regionRefused || next.ConsecutiveFailures >= threshold) && !next.AutoDisabled {
 		next.AutoDisabled = true
 		next.AutoDisabledAt = now.Unix()
 		transition = "disabled"

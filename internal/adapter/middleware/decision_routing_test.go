@@ -69,6 +69,9 @@ type drFixture struct {
 	settle *drSettle
 	// limit, when set, is installed as the token model limit.
 	limit map[string]bool
+	// after, when set, runs once routing is done and before the response is
+	// written, so a test can inspect the gin context a later stage would see.
+	after func(c *gin.Context, mr *ModelRequest)
 }
 
 // setupDecision wires sqlite, a System One channel for evaluator-a pointing at
@@ -157,6 +160,9 @@ func setupDecision(t *testing.T, delay time.Duration, withChannel bool) *drFixtu
 			return
 		}
 		ApplyDecisionRouting(c, mr, drTenant)
+		if f.after != nil {
+			f.after(c, mr)
+		}
 		body, _ := common.GetRequestBody(c)
 		c.JSON(http.StatusOK, gin.H{
 			"model":          mr.Model,
@@ -201,6 +207,17 @@ func (f *drFixture) do(path, body string) *httptest.ResponseRecorder {
 	f.t.Helper()
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	f.engine.ServeHTTP(w, req)
+	return w
+}
+
+// doWithHeader is do with one extra request header.
+func (f *drFixture) doWithHeader(path, body, key, value string) *httptest.ResponseRecorder {
+	f.t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(key, value)
 	w := httptest.NewRecorder()
 	f.engine.ServeHTTP(w, req)
 	return w

@@ -47,6 +47,14 @@ type Config struct {
 	// fresh probe, which caps the damage at one lost probe window instead of
 	// forever. Zero falls back to Timeout (see getOrCreate).
 	HalfOpenTimeout time.Duration
+	// FailureWindow bounds how long a failure stays "consecutive". When
+	// positive, a Closed breaker whose previous failure is older than this
+	// starts counting from one again, so a long-idle channel is not tripped by
+	// a failure from hours ago plus a fresh one. Zero (the default) keeps the
+	// historical behaviour: the run only ever resets on a success.
+	FailureWindow time.Duration
+	// Now is the clock. Nil means time.Now; tests inject a fake one.
+	Now func() time.Time
 	// OnStateChange is called on every state transition (for metrics/logging).
 	OnStateChange func(channelID int, from, to State)
 }
@@ -59,7 +67,7 @@ const defaultHalfOpenTimeout = 60 * time.Second
 
 // DefaultConfig returns production defaults.
 // Override via env: CB_THRESHOLD (default 5), CB_TIMEOUT_SEC (default 30),
-// CB_HALF_OPEN_TIMEOUT_SEC (default 60).
+// CB_HALF_OPEN_TIMEOUT_SEC (default 60), CB_FAILURE_WINDOW_SEC (default 0 = off).
 func DefaultConfig() Config {
 	threshold := 5
 	if v := os.Getenv("CB_THRESHOLD"); v != "" {
@@ -79,10 +87,17 @@ func DefaultConfig() Config {
 			halfOpenTimeout = time.Duration(n) * time.Second
 		}
 	}
+	var failureWindow time.Duration
+	if v := os.Getenv("CB_FAILURE_WINDOW_SEC"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			failureWindow = time.Duration(n) * time.Second
+		}
+	}
 	return Config{
 		Threshold:       threshold,
 		Timeout:         timeout,
 		HalfOpenTimeout: halfOpenTimeout,
+		FailureWindow:   failureWindow,
 	}
 }
 
@@ -98,6 +113,16 @@ type breaker struct {
 	threshold       int
 	timeout         time.Duration
 	halfOpenTimeout time.Duration
+	failureWindow   time.Duration
+	// clock returns the current time; nil means time.Now.
+	clock func() time.Time
+}
+
+func (b *breaker) now() time.Time {
+	if b.clock == nil {
+		return time.Now()
+	}
+	return b.clock()
 }
 
 // allow checks whether a request should be permitted.
@@ -111,9 +136,9 @@ func (b *breaker) allow() bool {
 		return true
 	case StateOpen:
 		// Check if timeout expired → transition to HalfOpen.
-		if time.Since(b.lastFailTime) >= b.timeout {
+		if b.now().Sub(b.lastFailTime) >= b.timeout {
 			b.state = StateHalfOpen
-			b.halfOpenSince = time.Now()
+			b.halfOpenSince = b.now()
 			return true // Allow one probe request.
 		}
 		return false
@@ -123,8 +148,8 @@ func (b *breaker) allow() bool {
 		// Past it we must assume the probe will never report — nothing else
 		// leaves HalfOpen — and admit a fresh one, otherwise this channel is
 		// excluded from routing for the lifetime of the process.
-		if time.Since(b.halfOpenSince) >= b.halfOpenTimeout {
-			b.halfOpenSince = time.Now()
+		if b.now().Sub(b.halfOpenSince) >= b.halfOpenTimeout {
+			b.halfOpenSince = b.now()
 			return true
 		}
 		return false
@@ -153,8 +178,14 @@ func (b *breaker) recordFailure() (State, State) {
 	defer b.mu.Unlock()
 
 	prev := b.state
+	now := b.now()
+	if b.state == StateClosed && b.failureWindow > 0 && b.consecutiveFails > 0 &&
+		now.Sub(b.lastFailTime) > b.failureWindow {
+		// The previous failure aged out: this one starts a new run.
+		b.consecutiveFails = 0
+	}
 	b.consecutiveFails++
-	b.lastFailTime = time.Now()
+	b.lastFailTime = now
 
 	switch b.state {
 	case StateClosed:
@@ -190,7 +221,7 @@ func (b *breaker) recordInconclusive() (State, State) {
 	if b.state == StateHalfOpen {
 		b.state = StateOpen
 		b.halfOpenSince = time.Time{}
-		b.lastFailTime = time.Now()
+		b.lastFailTime = b.now()
 	}
 	return prev, b.state
 }
@@ -245,6 +276,8 @@ func (r *Registry) getOrCreate(channelID int) *breaker {
 		threshold:       r.cfg.Threshold,
 		timeout:         r.cfg.Timeout,
 		halfOpenTimeout: halfOpenTimeout,
+		failureWindow:   r.cfg.FailureWindow,
+		clock:           r.cfg.Now,
 	}
 	r.breakers[channelID] = b
 	return b
@@ -290,6 +323,69 @@ func (r *Registry) RecordInconclusive(channelID int) {
 // GetState returns the current state of a channel's breaker.
 func (r *Registry) GetState(channelID int) State {
 	return r.getOrCreate(channelID).getState()
+}
+
+// AllOpen reports whether EVERY listed channel's breaker is currently open,
+// meaning Allow would refuse it right now, and if so how long until the
+// soonest of them would admit a probe. It is a read-only view for callers that
+// must decide whether a whole candidate set is dead before sending anything:
+// it never creates a breaker and never advances a state machine, so it does not
+// consume a probe slot (that happens only on Allow).
+//
+// A channel counts as open when its breaker is Open and still inside its
+// cooldown, or HalfOpen with the in-flight probe still inside its own bound.
+// A channel with no breaker yet, a Closed one, or one whose cooldown/probe
+// bound has already elapsed (Allow would admit it) counts as NOT open. An empty
+// list is not "all open". The duration is the minimum remaining wait across the
+// listed channels, and 0 whenever the bool is false.
+func (r *Registry) AllOpen(ids []int) (bool, time.Duration) {
+	if len(ids) == 0 {
+		return false, 0
+	}
+	r.mu.RLock()
+	brs := make([]*breaker, len(ids))
+	for i, id := range ids {
+		b, ok := r.breakers[id]
+		if !ok {
+			r.mu.RUnlock()
+			return false, 0
+		}
+		brs[i] = b
+	}
+	r.mu.RUnlock()
+
+	var soonest time.Duration
+	for i, b := range brs {
+		wait, open := b.admitsIn()
+		if !open {
+			return false, 0
+		}
+		if i == 0 || wait < soonest {
+			soonest = wait
+		}
+	}
+	return true, soonest
+}
+
+// admitsIn reports (time until allow() would admit a probe, true) when the
+// breaker is currently refusing, and (0, false) when allow() would admit now.
+// Side-effect free.
+func (b *breaker) admitsIn() (time.Duration, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var wait time.Duration
+	switch b.state {
+	case StateOpen:
+		wait = b.timeout - b.now().Sub(b.lastFailTime)
+	case StateHalfOpen:
+		wait = b.halfOpenTimeout - b.now().Sub(b.halfOpenSince)
+	default:
+		return 0, false
+	}
+	if wait <= 0 {
+		return 0, false
+	}
+	return wait, true
 }
 
 // Cleanup removes breakers for channels that no longer exist.

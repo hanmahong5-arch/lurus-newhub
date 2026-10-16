@@ -21,7 +21,10 @@ const failureBackoff = 5 * time.Second
 
 type snapshot struct {
 	byKey map[string]*entity.RoutingPolicy
-	exp   time.Time
+	// fallback holds the enabled fallback-strategy policies, kept apart from
+	// byKey so each hook only ever sees its own strategy.
+	fallback map[string]*entity.RoutingPolicy
+	exp      time.Time
 }
 
 // Index is the request path's view of the enabled policies. The whole enabled
@@ -63,6 +66,22 @@ func (i *Index) Lookup(tenantID, model string) *entity.RoutingPolicy {
 	return s.byKey[indexKey(tenantID, model)]
 }
 
+// LookupFallback returns the enabled fallback policy for (tenant, model), or
+// nil. Same cost profile as Lookup: one atomic load and one map read.
+func (i *Index) LookupFallback(tenantID, model string) *entity.RoutingPolicy {
+	if tenantID == "" || model == "" {
+		return nil
+	}
+	s := i.snap.Load()
+	if s == nil || !i.now().Before(s.exp) {
+		s = i.refresh(s)
+	}
+	if s == nil {
+		return nil
+	}
+	return s.fallback[indexKey(tenantID, model)]
+}
+
 // Invalidate drops the snapshot so the next Lookup reloads. Called by the
 // admin handlers after a write.
 func (i *Index) Invalidate() { i.snap.Store(nil) }
@@ -82,7 +101,7 @@ func (i *Index) refresh(stale *snapshot) *snapshot {
 		common.SysLog("routing policy reload failed, keeping previous view: " + err.Error())
 		next := &snapshot{exp: i.now().Add(failureBackoff)}
 		if stale != nil {
-			next.byKey = stale.byKey
+			next.byKey, next.fallback = stale.byKey, stale.fallback
 		} else {
 			// No previous view: fail open to "no policies" (routing is an
 			// optimisation, never a reason to refuse a request).
@@ -92,14 +111,20 @@ func (i *Index) refresh(stale *snapshot) *snapshot {
 		return next
 	}
 	m := make(map[string]*entity.RoutingPolicy, len(rows))
+	fb := make(map[string]*entity.RoutingPolicy)
 	for k := range rows {
 		p := rows[k]
-		if !p.Enabled || p.Strategy != entity.RoutingStrategyDecision {
+		if !p.Enabled {
 			continue
 		}
-		m[indexKey(p.TenantID, p.PublicModel)] = &p
+		switch p.Strategy {
+		case entity.RoutingStrategyDecision:
+			m[indexKey(p.TenantID, p.PublicModel)] = &p
+		case entity.RoutingStrategyFallback:
+			fb[indexKey(p.TenantID, p.PublicModel)] = &p
+		}
 	}
-	next := &snapshot{byKey: m, exp: i.now().Add(IndexTTL)}
+	next := &snapshot{byKey: m, fallback: fb, exp: i.now().Add(IndexTTL)}
 	i.snap.Store(next)
 	return next
 }
@@ -111,6 +136,11 @@ var defaultIndex = NewIndex(func() ([]entity.RoutingPolicy, error) {
 	}
 	return repo.ListEnabledRoutingPolicies()
 }, nil)
+
+// LookupFallback is the process-wide fallback-policy lookup.
+func LookupFallback(tenantID, model string) *entity.RoutingPolicy {
+	return defaultIndex.LookupFallback(tenantID, model)
+}
 
 // Lookup is the process-wide lookup used by the request path.
 func Lookup(tenantID, model string) *entity.RoutingPolicy {

@@ -514,9 +514,7 @@ func NewError(err error, errorCode ErrorCode, ops ...NewAPIErrorOptions) *NewAPI
 	var newErr *NewAPIError
 	// 保留深层传递的 new err
 	if errors.As(err, &newErr) {
-		for _, op := range ops {
-			op(newErr)
-		}
+		applyOps(newErr, ops)
 		return newErr
 	}
 	e := &NewAPIError{
@@ -526,9 +524,7 @@ func NewError(err error, errorCode ErrorCode, ops ...NewAPIErrorOptions) *NewAPI
 		StatusCode: http.StatusInternalServerError,
 		errorCode:  errorCode,
 	}
-	for _, op := range ops {
-		op(e)
-	}
+	applyOps(e, ops)
 	return e
 }
 
@@ -544,9 +540,7 @@ func NewOpenAIError(err error, errorCode ErrorCode, statusCode int, ops ...NewAP
 			}
 			newErr.RelayError = openaiError
 		}
-		for _, op := range ops {
-			op(newErr)
-		}
+		applyOps(newErr, ops)
 		return newErr
 	}
 	openaiError := OpenAIError{
@@ -554,7 +548,17 @@ func NewOpenAIError(err error, errorCode ErrorCode, statusCode int, ops ...NewAP
 		Type:    string(errorCode),
 		Code:    errorCode,
 	}
-	return WithOpenAIError(openaiError, statusCode, ops...)
+	e := WithOpenAIError(openaiError, statusCode)
+	// WithOpenAIError rebuilds Err from the message text, which severs the
+	// chain: a body read cut short by the caller's hang-up arrived here as
+	// context.Canceled and left as an anonymous 500. Keep the cause.
+	if e.Err.Error() == err.Error() {
+		e.Err = err
+	} else {
+		e.Err = &maskedError{msg: e.Err.Error(), cause: err}
+	}
+	applyOps(e, ops)
+	return e
 }
 
 func InitOpenAIError(errorCode ErrorCode, statusCode int, ops ...NewAPIErrorOptions) *NewAPIError {
@@ -576,9 +580,7 @@ func NewErrorWithStatusCode(err error, errorCode ErrorCode, statusCode int, ops 
 		StatusCode: statusCode,
 		errorCode:  errorCode,
 	}
-	for _, op := range ops {
-		op(e)
-	}
+	applyOps(e, ops)
 
 	return e
 }
@@ -676,6 +678,8 @@ func IsGatewayOriginated(err *NewAPIError) bool {
 // circuit breaker so that user-side errors (4xx, client cancellation) do not
 // trip a healthy channel and starve other tenants of capacity.
 //
+// Caller cancellation (context.Canceled anywhere in the cause chain) wins over
+// every other signal, including a channel:* code.
 // True:  channel:* errors, upstream timeouts (408/504/524), 5xx, unclassified.
 // False: nil, ctx.Canceled, 4xx (other than the upstream-timeout statuses),
 // and any error the gateway raised itself (IsGatewayOriginated) whatever its
@@ -691,13 +695,16 @@ func IsUpstreamFailure(err *NewAPIError) bool {
 	if err == nil {
 		return false
 	}
+	// The caller's own cancellation is checked FIRST: a channel-scoped error
+	// (channel:aws_client_error, ...) that merely wraps context.Canceled is the
+	// caller hanging up, not the channel failing.
+	if err.Err != nil && errors.Is(err.Err, context.Canceled) {
+		return false
+	}
 	if IsChannelError(err) {
 		return true
 	}
 	if IsGatewayOriginated(err) {
-		return false
-	}
-	if err.Err != nil && errors.Is(err.Err, context.Canceled) {
 		return false
 	}
 	switch err.StatusCode {

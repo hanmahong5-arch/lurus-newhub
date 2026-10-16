@@ -26,11 +26,14 @@ import (
 // bound what the evaluator is sent, so a policy can never inflate the
 // evaluation request.
 const (
-	MaxCandidates        = 32
-	MaxCriteriaBytes     = 2048
-	MaxInstructionsBytes = 4096
-	MaxCandidateIDLen    = 64
-	MaxModelNameLen      = 128
+	MaxCandidates = 32
+	// MaxFallbackCandidates bounds an ordered fallback chain: each entry costs
+	// a cache lookup and a breaker read on the request path.
+	MaxFallbackCandidates = 8
+	MaxCriteriaBytes      = 2048
+	MaxInstructionsBytes  = 4096
+	MaxCandidateIDLen     = 64
+	MaxModelNameLen       = 128
 
 	// NoPreferenceID is the id of the always-present "none of the above"
 	// option the evaluator may answer. A candidate may not use it.
@@ -60,8 +63,12 @@ func ValidatePolicy(p *entity.RoutingPolicy, routable func(model string) bool) *
 	if p.PublicModel == "" || len(p.PublicModel) > MaxModelNameLen {
 		return invalid("INVALID_MODEL", "public model must be 1-%d bytes", MaxModelNameLen)
 	}
-	if p.Strategy != entity.RoutingStrategyDecision {
-		return invalid("INVALID_STRATEGY", "strategy must be %q", entity.RoutingStrategyDecision)
+	switch p.Strategy {
+	case entity.RoutingStrategyDecision:
+	case entity.RoutingStrategyFallback:
+		return validateFallback(p, routable)
+	default:
+		return invalid("INVALID_STRATEGY", "strategy must be %q or %q", entity.RoutingStrategyDecision, entity.RoutingStrategyFallback)
 	}
 	if math.IsNaN(p.MinConfidence) || p.MinConfidence < 0 || p.MinConfidence > 1 {
 		return invalid("INVALID_MIN_CONFIDENCE", "min_confidence must be within [0, 1]")
@@ -144,4 +151,39 @@ func DefaultModel(requested, defaultCandidate string, cands []entity.RoutingCand
 		}
 	}
 	return ""
+}
+
+// validateFallback checks a fallback policy: an ordered list of 1..8 candidate
+// models, each routable for the tenant and different from the public model.
+// The decision-only fields (evaluator_model, instructions, min_confidence,
+// default_candidate) are accepted as stored and never required: the strategy
+// does not read them.
+func validateFallback(p *entity.RoutingPolicy, routable func(model string) bool) *ValidationError {
+	n := len(p.Candidates)
+	if n < 1 || n > MaxFallbackCandidates {
+		return invalid("INVALID_CANDIDATES", "fallback candidates must contain 1-%d entries, got %d", MaxFallbackCandidates, n)
+	}
+	seen := make(map[string]struct{}, n)
+	for i, c := range p.Candidates {
+		if c.ID == "" || len(c.ID) > MaxCandidateIDLen || !candidateIDRe.MatchString(c.ID) {
+			return invalid("INVALID_CANDIDATE_ID", "candidates[%d].id must be 1-%d characters of letters, digits, '_', '.', '-'", i, MaxCandidateIDLen)
+		}
+		if _, dup := seen[c.ID]; dup {
+			return invalid("DUPLICATE_CANDIDATE", "candidates[%d].id %q is duplicated", i, c.ID)
+		}
+		seen[c.ID] = struct{}{}
+		if c.Model == "" || len(c.Model) > MaxModelNameLen {
+			return invalid("INVALID_CANDIDATE_MODEL", "candidates[%d].model must be 1-%d bytes", i, MaxModelNameLen)
+		}
+		if c.Model == p.PublicModel {
+			return invalid("INVALID_CANDIDATE_MODEL", "candidates[%d].model must differ from the public model", i)
+		}
+		if routable != nil && !routable(c.Model) {
+			return invalid("MODEL_NOT_ROUTABLE", "candidates[%d].model %q is not a public model this tenant can route", i, c.Model)
+		}
+		if len(c.Criteria) > MaxCriteriaBytes {
+			return invalid("CRITERIA_TOO_LONG", "candidates[%d].criteria exceeds %d bytes", i, MaxCriteriaBytes)
+		}
+	}
+	return nil
 }
