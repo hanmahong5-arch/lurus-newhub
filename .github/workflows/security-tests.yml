@@ -70,8 +70,8 @@ jobs:
         # whole-module compile in `go test ./internal/...` may still trip
         # on transitive packages that import web.
         run: |
-          mkdir -p web/dist
-          echo '<!doctype html><title>stub</title>' > web/dist/index.html
+          mkdir -p web/dist/next
+          echo '<!doctype html><title>stub</title>' > web/dist/next/index.html
 
       - name: Set up Go
         uses: actions/setup-go@v5

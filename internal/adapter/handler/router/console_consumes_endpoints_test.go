@@ -5,7 +5,14 @@ package router
 // opposite and, as of cycle 10, more common failure: the server ships a route
 // that projects data to a person, and no console surface ever reads it.
 //
-// Measured 2026-09-16, before this gate existed:
+// "Reads" means an actual HTTP call: the corpus is the set of URLs the
+// console's call sites resolve to (the extractor in
+// frontend_route_contract_test.go, over web/next/src), not a text search, so a
+// path that survives only in a string constant, a snippet or a type does not
+// count as a consumer. This is stricter than the grep the classic console was
+// held to, and it follows constants and helpers (`${BASE}/grants`).
+//
+// Measured 2026-09-16, before this gate existed (against the classic console):
 //   - GET /api/data/self/ had been aggregating per-day, per-model usage since
 //     2026-06-25 (1614 rows in production) with zero consumers in web/src.
 //   - GET /api/status already returned announcements, faq and api_info; the v2
@@ -24,48 +31,15 @@ package router
 // noConsoleConsumer with a reason that names the intended consumer.
 
 import (
-	"os"
-	"path/filepath"
-	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
 
-// A path named in a COMMENT is not a consumer. Stripping comments before the
-// match is what makes this gate mean "something calls it" rather than
-// "something mentions it": when this test was first mutation-checked, deleting
-// the admin-rankings call left the gate green because the same file's doc
-// comment still spelled the path out.
-var (
-	blockCommentRe = regexp.MustCompile(`(?s)/\*.*?\*/`)
-	lineCommentRe  = regexp.MustCompile(`(?m)^\s*//.*$`)
-)
-
-// Whole-line // comments go first: a line comment that mentions a glob such as
-// "/console/v2/*" would otherwise open a block comment running to the next
-// "*/" in the file and swallow the real calls in between.
-func stripComments(src string) string {
-	return blockCommentRe.ReplaceAllString(lineCommentRe.ReplaceAllString(src, " "), " ")
-}
-
-func TestStripCommentsLineCommentGlobDoesNotSwallowCode(t *testing.T) {
-	src := `// only matches /console/v2/*
-const href = '/admin/cost';
-/* doc */ call('/x');
-`
-	got := stripComments(src)
-	if !strings.Contains(got, "/admin/cost") {
-		t.Fatalf("code after a line comment containing a glob was stripped: %q", got)
-	}
-	if strings.Contains(got, "doc") || strings.Contains(got, "only matches") {
-		t.Fatalf("comments survived: %q", got)
-	}
-}
-
 // userFacingProjections are routes whose response is rendered to a human in
-// the console. Each value is the substring that must appear in web/src for the
-// route to count as consumed — usually the path itself, or a distinctive
-// fragment of it when the console builds the URL from a template.
+// the console. Each value is the substring that must appear in the resolved
+// URL of some web/next/src call site for the route to count as consumed —
+// usually the path itself, or a distinctive fragment of it.
 //
 // NOT in scope, on purpose: relay endpoints (/v1/**, consumed by customer code
 // and not by our console), /internal/** (service-to-service, X-API-Key),
@@ -103,8 +77,8 @@ var userFacingProjections = map[string]string{
 	"admin system tasks":          "/admin/system/tasks",
 	"admin rankings (v2)":         "/admin/analytics/rankings",
 	"admin model performance":     "/admin/analytics/model-performance",
-	"admin gateway health":        "/admin/gateway",
-	"admin cost intelligence":     "/admin/cost",
+	"admin gateway health":        "/admin/gateway/health",
+	"admin cost intelligence":     "/admin/governance/savings",
 	"admin tenants (v2)":          "/admin/tenants",
 	"projects (v2)":               "/projects",
 	"credit pool (v2)":            "/credit-pool",
@@ -125,73 +99,103 @@ var noConsoleConsumer = map[string]string{
 	// The v1 per-user log listing. Its only console surface was the legacy
 	// components/table/usage-logs grid (and hooks/usage-logs behind it),
 	// deleted in cycle 12 L3 after an enumeration found no importer outside
-	// that subtree. The v2 Log page reads the tenant-scoped
-	// /api/v2/:tenant_slug/logs instead (web/src/pages/v2/Log/index.jsx:324).
+	// that subtree. The new console's usage-logs feature reads the
+	// tenant-scoped /api/v2/:tenant_slug/logs instead
+	// (web/next/src/features/usage-logs/api.ts).
 	// The v1 route stays registered for scripted API clients that predate v2.
 	"GET /api/log/self": "superseded in the console by the v2 tenant-scoped " +
 		"logs endpoint; kept as a v1 API surface for scripted clients",
+	// The v1 token listing. The new console's API-keys feature
+	// (web/next/src/features/keys/api.ts) manages tokens through the
+	// tenant-scoped /api/v2/:tenant_slug/tokens routes only; no call in
+	// web/next/src reaches /api/token. (The classic console's check passed on
+	// the substring alone.) Kept as a v1 API surface for scripted clients.
+	"GET /api/token/": "superseded in the console by the v2 tenant-scoped " +
+		"tokens endpoints (features/keys); kept as a v1 API surface for scripted clients",
 }
 
+// consumedBy reports whether some URL in corpus (one per line) contains needle
+// ending on a path-segment boundary: the needle must be followed by the end of
+// the URL or a '/', unless it ends in '/' itself. A bare substring match would
+// let a renamed route ("/chat/sendx") keep satisfying the needle "/chat/send".
+func consumedBy(corpus, needle string) bool {
+	for off := 0; ; {
+		i := strings.Index(corpus[off:], needle)
+		if i < 0 {
+			return false
+		}
+		end := off + i + len(needle)
+		if strings.HasSuffix(needle, "/") || end == len(corpus) ||
+			corpus[end] == '\n' || corpus[end] == '/' {
+			return true
+		}
+		off += i + 1
+	}
+}
+
+func TestConsumedByRespectsSegmentBoundaries(t *testing.T) {
+	cases := []struct {
+		corpus, needle string
+		want           bool
+	}{
+		{"/api/v2/~/chat/send", "/chat/send", true},
+		{"/api/v2/~/chat/sendx", "/chat/send", false},
+		{"/api/v2/~/chat/sendx\n/api/v2/~/chat/send\n/x", "/chat/send", true},
+		{"/api/data/self/", "/api/data/self", true},
+		{"/api/v2/~/analytics/rankings", "/analytics/", true},
+		{"/api/v2/admin/tenants/{}/model-limits", "model-limits", true},
+		{"/api/v2/admin/tenants/{}/model-limitsx", "model-limits", false},
+		{"/api/v2/~/models/routable", "/models", true},
+		{"/api/v2/~/modelsx", "/models", false},
+	}
+	for _, tc := range cases {
+		if got := consumedBy(tc.corpus, tc.needle); got != tc.want {
+			t.Errorf("consumedBy(%q, %q) = %v, want %v", tc.corpus, tc.needle, got, tc.want)
+		}
+	}
+}
+
+// minConsoleSourceFiles guards the guard: an empty corpus would make every
+// lookup below vacuous. web/next/src holds ~820 shipped source files.
+const minConsoleSourceFiles = 400
+
+// minConsumerCalls: the resolved-call corpus this gate searches. The real
+// console resolves ~230 call sites; see minConsoleCalls in
+// frontend_route_contract_test.go.
+const minConsumerCalls = 165
+
 // TestConsoleReadsEveryUserFacingEndpoint fails when a route in
-// userFacingProjections has no reference anywhere under web/src.
+// userFacingProjections has no resolved call under web/next/src.
 func TestConsoleReadsEveryUserFacingEndpoint(t *testing.T) {
-	webSrc := filepath.Join("..", "..", "..", "..", "web", "src")
-	if _, err := os.Stat(webSrc); err != nil {
-		t.Skipf("console sources not present at %s: %v", webSrc, err)
+	sources := loadConsoleSources(t)
+	if len(sources) < minConsoleSourceFiles {
+		t.Fatalf("scanned only %d console source files under %s — the walk did not find the console",
+			len(sources), consoleSrcRoot())
 	}
 
-	var blob strings.Builder
-	files := 0
-	err := filepath.Walk(webSrc, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			if info.Name() == "node_modules" || info.Name() == "dist" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		switch filepath.Ext(path) {
-		case ".js", ".jsx", ".ts", ".tsx":
-		default:
-			return nil
-		}
-		// Test files do not count as a consumer: a page can be deleted while
-		// its test keeps the string alive, which is exactly how a surface
-		// disappears without this gate noticing.
-		base := filepath.Base(path)
-		if strings.Contains(base, ".test.") || strings.Contains(base, ".spec.") {
-			return nil
-		}
-		b, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return readErr
-		}
-		blob.WriteString(stripComments(string(b)))
-		blob.WriteString("\n")
-		files++
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walking %s: %v", webSrc, err)
+	calls := extractCalls(sources)
+	var urls []string
+	for _, c := range calls {
+		urls = append(urls, c.paths...)
 	}
-	// Guard the guard: an empty corpus would make every lookup below vacuous.
-	if files < 100 {
-		t.Fatalf("scanned only %d console source files under %s — the walk did not find the console", files, webSrc)
+	if len(calls) < minConsumerCalls {
+		t.Fatalf("extracted only %d console calls (floor %d) — the extractor stopped recognising a call shape",
+			len(calls), minConsumerCalls)
 	}
+	// Wildcard segments print as "{}" so a needle never has to know the byte.
+	corpus := strings.ReplaceAll(strings.Join(urls, "\n"), interpolatedSeg, "{}")
 
-	corpus := blob.String()
 	var missing []string
 	for name, needle := range userFacingProjections {
 		if _, excused := noConsoleConsumer[name]; excused {
 			continue
 		}
-		if !strings.Contains(corpus, needle) {
+		if !consumedBy(corpus, needle) {
 			missing = append(missing, name+" (looked for "+needle+")")
 		}
 	}
 	if len(missing) > 0 {
+		sort.Strings(missing)
 		t.Errorf("user-facing routes with no console consumer — wire one, or add the route to "+
 			"noConsoleConsumer with a reason naming its intended consumer:\n  %s",
 			strings.Join(missing, "\n  "))
@@ -203,5 +207,22 @@ func TestConsoleReadsEveryUserFacingEndpoint(t *testing.T) {
 		if _, listed := userFacingProjections[name]; !listed {
 			t.Errorf("noConsoleConsumer excuses %q, which is not in userFacingProjections — remove the excuse or add the route", name)
 		}
+	}
+}
+
+// TestConsumerCorpusIsCallsNotMentions pins the property the header claims: a
+// URL that only appears as a bare string (not a call argument) is not a
+// consumer.
+func TestConsumerCorpusIsCallsNotMentions(t *testing.T) {
+	calls := extractCalls(map[string]string{
+		"features/x/api.ts": "const UNUSED = '/api/never/called'\nconst NOTE = 'see /api/also/not/called'\napi.get('/api/real')",
+	})
+	var urls []string
+	for _, c := range calls {
+		urls = append(urls, c.paths...)
+	}
+	got := strings.Join(urls, ",")
+	if got != "/api/real" {
+		t.Fatalf("corpus = %q, want only the called URL", got)
 	}
 }

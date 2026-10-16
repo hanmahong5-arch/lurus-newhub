@@ -84,11 +84,11 @@ func TestSetWebRouter_StaticAssetsAreNotWebRateLimited(t *testing.T) {
 	// ...while the SPA document keeps the limiter it has always had, and the
 	// five asset requests above did not eat any of its budget.
 	for i := 1; i <= 2; i++ {
-		if w := getFrom(engine, clientIP, "/console/v2/dashboard"); w.Code != http.StatusOK {
+		if w := getFrom(engine, clientIP, "/dashboard"); w.Code != http.StatusOK {
 			t.Fatalf("SPA document request %d of 2 should still be served (200), got %d", i, w.Code)
 		}
 	}
-	if w := getFrom(engine, clientIP, "/console/v2/dashboard"); w.Code != http.StatusTooManyRequests {
+	if w := getFrom(engine, clientIP, "/dashboard"); w.Code != http.StatusTooManyRequests {
 		t.Fatalf("the third SPA document request should exhaust the budget of %d and return 429, got %d — the limiter is no longer mounted on the SPA path",
 			common.GlobalWebRateLimitNum, w.Code)
 	}
@@ -141,11 +141,11 @@ func TestSetWebRoutes_DistRootFilesAreNotWebRateLimited(t *testing.T) {
 	// The document is what the budget is for, and none of the eight requests
 	// above spent any of it.
 	for i := 1; i <= 2; i++ {
-		if w := getFrom(engine, clientIP, "/console/v2/dashboard"); w.Code != http.StatusOK {
+		if w := getFrom(engine, clientIP, "/dashboard"); w.Code != http.StatusOK {
 			t.Fatalf("SPA document request %d of 2 = %d, want 200", i, w.Code)
 		}
 	}
-	refused := getFrom(engine, clientIP, "/console/v2/dashboard")
+	refused := getFrom(engine, clientIP, "/dashboard")
 	if refused.Code != http.StatusTooManyRequests {
 		t.Fatalf("the third SPA document request should exhaust the budget of %d and return 429, got %d — the limiter is no longer bound to the SPA document",
 			common.GlobalWebRateLimitNum, refused.Code)

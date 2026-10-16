@@ -174,7 +174,7 @@ func TestPrecompressedAssets_ServesTheBuildOutput(t *testing.T) {
 	})
 
 	t.Run("ignores paths outside the hashed asset prefix", func(t *testing.T) {
-		w := getAsset(t, engine, "/console/v2/dashboard", "br, gzip")
+		w := getAsset(t, engine, "/dashboard", "br, gzip")
 		if got := w.Header().Get("Content-Encoding"); got == "br" {
 			t.Fatal("the SPA document was answered with a precompressed body")
 		}

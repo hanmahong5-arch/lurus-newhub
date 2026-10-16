@@ -211,7 +211,7 @@ func shippedDefaults() []shippedDefault {
 			name:  "PreConsumedQuota",
 			got:   defaultValue(common.PreConsumedQuota),
 			want:  "500",
-			claim: "web/src/pages/Setting/Operation/SettingsCreditLimit.jsx",
+			claim: "web/next/src/features/system-settings/sections/operations.tsx",
 			why: "Fallback pre-authorisation amount in quota units. Feeds the pre-auth " +
 				"the relay takes ONCE per request (app.PreConsumeQuota's " +
 				"PlatformPreAuthID re-entry guard), which is why raising RetryTimes " +
@@ -221,11 +221,11 @@ func shippedDefaults() []shippedDefault {
 			name:  "QuotaRemindThreshold",
 			got:   defaultValue(common.QuotaRemindThreshold),
 			want:  "1000",
-			claim: "web/src/pages/Setting/Operation/SettingsMonitoring.jsx",
+			claim: "web/next/src/features/system-settings/sections/operations.tsx",
 			why: "Balance under which the low-quota reminder mail fires " +
 				"(internal/app/quota.go). The claim an operator actually meets is the " +
-				"console field 额度提醒阈值 in SettingsMonitoring.jsx, whose helper text " +
-				"promises mail below this number. doc/runbook/quota-cap-402.md does NOT " +
+				"console's quota-reminder field (system settings, sections/operations.tsx), " +
+				"whose help text promises mail below this number. doc/runbook/quota-cap-402.md does NOT " +
 				"mention this key — the previous version of this row said it did.",
 		},
 		{
@@ -242,7 +242,7 @@ func shippedDefaults() []shippedDefault {
 			name:  "QuotaForNewUser",
 			got:   defaultValue(common.QuotaForNewUser),
 			want:  "0",
-			claim: "web/src/components/settings/QuotaLimitsSettingPage.jsx",
+			claim: "web/next/src/features/system-settings/sections/operations.tsx",
 			why: "Free quota granted on registration. 0 is deliberate on this deployment " +
 				"— account lifecycle and money belong to platform, newhub is a relying " +
 				"party — but it is also the number an operator reading upstream New API " +
@@ -253,24 +253,27 @@ func shippedDefaults() []shippedDefault {
 			name:  "QuotaForInviter",
 			got:   defaultValue(common.QuotaForInviter),
 			want:  "0",
-			claim: "web/src/components/settings/QuotaLimitsSettingPage.jsx",
+			claim: "internal/adapter/repo/option.go",
 			why: "Invite reward for the inviter. Same reasoning as QuotaForNewUser: the " +
-				"invite flow exists in code and pays nothing by default.",
+				"invite flow exists in code and pays nothing by default. " +
+				"No console field since the legacy console was retired: the invite reward has no reader beyond its option key, so the API (PUT /api/option/) is the only way to set it.",
 		},
 		{
 			name:  "QuotaForInvitee",
 			got:   defaultValue(common.QuotaForInvitee),
 			want:  "0",
-			claim: "web/src/components/settings/QuotaLimitsSettingPage.jsx",
-			why:   "Invite reward for the invitee. Same reasoning as QuotaForInviter.",
+			claim: "internal/adapter/repo/option.go",
+			why: "Invite reward for the invitee. Same reasoning as QuotaForInviter. " +
+				"No console field since the legacy console was retired; same as QuotaForInviter.",
 		},
 		{
 			name:  "SessionTimeoutMinutes",
 			got:   defaultValue(common.SessionTimeoutMinutes),
 			want:  "10080",
-			claim: "web/src/pages/v2/Admin/Settings/index.jsx",
+			claim: "internal/adapter/repo/option.go",
 			why: "Console session lifetime, 7 days. repo/option.go clamps a <=0 write " +
-				"back to this same number, so the two must not drift apart.",
+				"back to this same number, so the two must not drift apart. " +
+				"The legacy console's settings field went with it; repo/option.go is where an operator's write lands and gets clamped.",
 		},
 		{
 			name:  "RelayResponseHeaderTimeout",
@@ -449,7 +452,7 @@ func shippedDefaults() []shippedDefault {
 			name:  "LogConsumeEnabled",
 			got:   defaultValue(common.LogConsumeEnabled),
 			want:  "true",
-			claim: "web/src/pages/Setting/Operation/SettingsLog.jsx",
+			claim: "web/next/src/features/system-settings/sections/operations.tsx",
 			why: "Whether a consume-log row is written per billable relay. Off would " +
 				"silently empty the leaderboard, quota_data and every log-derived " +
 				"dashboard the runbooks point at.",
@@ -473,31 +476,34 @@ func shippedDefaults() []shippedDefault {
 			name:  "PasswordRegisterEnabled",
 			got:   defaultValue(common.PasswordRegisterEnabled),
 			want:  "true",
-			claim: "web/src/components/settings/AuthSettingPage.jsx",
+			claim: "internal/adapter/handler/misc.go",
 			why: "Whether the open registration above accepts a password signup at all. " +
 				"Pinned beside RegisterEnabled because the two are only dangerous " +
 				"together: RegisterEnabled=true with this false leaves no password " +
-				"signup form to abuse.",
+				"signup form to abuse. " +
+				"No console field since the legacy console was retired (registration belongs to the platform); /api/status (misc.go) is where the value is still published.",
 		},
 		{
 			name:  "EmailVerificationEnabled",
 			got:   defaultValue(common.EmailVerificationEnabled),
 			want:  "false",
-			claim: "web/src/components/settings/AuthSettingPage.jsx",
+			claim: "internal/adapter/handler/misc.go",
 			why: "Whether a registration must prove control of its email address. " +
 				"Shipped OFF, directly beside RegisterEnabled=true and " +
 				"PasswordRegisterEnabled=true: on an instance with no options rows, " +
 				"anyone can create an account with an address they do not own. Pinned " +
-				"so the three move together in a reader's mind instead of one at a time.",
+				"so the three move together in a reader's mind instead of one at a time. " +
+				"Published through /api/status (misc.go); no console field since the legacy console was retired.",
 		},
 		{
 			name:  "TurnstileCheckEnabled",
 			got:   defaultValue(common.TurnstileCheckEnabled),
 			want:  "false",
-			claim: "web/src/components/settings/AuthSettingPage.jsx",
+			claim: "internal/adapter/handler/misc.go",
 			why: "The only bot check in front of that registration form, shipped OFF. " +
 				"Same reason as the row above: the exposure is the COMBINATION, and no " +
-				"single row was pinned before cycle-14 L2's second pass.",
+				"single row was pinned before cycle-14 L2's second pass. " +
+				"Published through /api/status (misc.go); no console field since the legacy console was retired.",
 		},
 	}
 }

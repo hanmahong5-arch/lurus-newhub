@@ -23,13 +23,15 @@ import { useTranslation } from 'react-i18next';
 import { ErrorState } from '@/components/error-state';
 import { PageHeader } from '@/components/layout/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useUserAccess } from '@/hooks/use-admin';
 import { currentLocale } from '@/lib/locale';
 
 import { MarketShareSection } from './components/market-share-section';
 import { ModelsSection } from './components/models-section';
 import { PeriodTabs } from './components/period-tabs';
 import { PulseSection } from './components/pulse-section';
-import { rankingsQueryOptions } from './lib/api';
+import { ScopeSwitch, type ScopeKind } from './components/scope-switch';
+import { rankingsQueryOptions, type RankingScope } from './lib/api';
 import { DEFAULT_PERIOD, hoursOf, type RankingPeriod } from './lib/periods';
 
 function RankingsLoading() {
@@ -43,12 +45,22 @@ function RankingsLoading() {
 
 /**
  * Model leaderboard for the caller's own tenant (tenant admins). Volumes are
- * never cross-tenant; the longest window is 30 days.
+ * never cross-tenant for them; platform root can also switch to the
+ * cross-tenant board (optionally one tenant). The longest window is 30 days.
  */
 export function RankingsPage() {
   const { t } = useTranslation();
+  const { isPlatformRoot } = useUserAccess();
   const [period, setPeriod] = useState<RankingPeriod>(DEFAULT_PERIOD);
-  const q = useQuery(rankingsQueryOptions('model', hoursOf(period)));
+  const [scopeKind, setScopeKind] = useState<ScopeKind>('tenant');
+  const [tenantId, setTenantId] = useState('');
+  // Only root may leave its own tenant; for everyone else the scope state is
+  // ignored, so a stale value can never turn into an admin-route call.
+  const crossTenant = isPlatformRoot && scopeKind === 'all';
+  const scope: RankingScope | undefined = crossTenant
+    ? { tenantId }
+    : undefined;
+  const q = useQuery(rankingsQueryOptions('model', hoursOf(period), scope));
   const data = q.data;
 
   let body;
@@ -68,7 +80,7 @@ export function RankingsPage() {
     body = (
       <div className='space-y-6'>
         <ModelsSection data={q.data} period={period} />
-        <MarketShareSection period={period} />
+        <MarketShareSection period={period} scope={scope} />
         <PulseSection rows={q.data.rows} />
       </div>
     );
@@ -88,10 +100,26 @@ export function RankingsPage() {
     <>
       <PageHeader
         title={t('Rankings')}
-        description={t(
-          'The most-used models and who uses them, from your own tenant traffic.',
-        )}
+        description={
+          crossTenant
+            ? t(
+                'The most-used models and who uses them, across tenant traffic on the platform.',
+              )
+            : t(
+                'The most-used models and who uses them, from your own tenant traffic.',
+              )
+        }
       />
+      {isPlatformRoot && (
+        <div className='mt-4'>
+          <ScopeSwitch
+            kind={scopeKind}
+            tenantId={tenantId}
+            onKindChange={setScopeKind}
+            onTenantChange={setTenantId}
+          />
+        </div>
+      )}
       <div className='mt-5 flex flex-wrap items-end justify-between gap-3'>
         <PeriodTabs period={period} onChange={setPeriod} />
         {updated && (

@@ -1,13 +1,13 @@
 /**
- * Session handling for the new console.
+ * Session handling for the console.
  *
- * The new console has no sign-in screen. The session is the same gin session
- * cookie the legacy console uses; when it is missing or expired the browser is
- * sent to the legacy /login page with `?redirect=<current /next/... path>` and
- * that page brings the person back (web/src/helpers/loginRedirect.js).
+ * The session is the gin session cookie. When it is missing or expired the
+ * browser is sent to /login with `?redirect=<current path>` and the sign-in
+ * flow (features/auth) brings the person back (features/auth/lib/
+ * login-redirect.ts validates the redirect).
  */
 
-/** Role levels as stored on the user row (web/src/helpers/auth.jsx). */
+/** Role levels as stored on the user row (model.RoleCommonUser and friends). */
 export const ROLE = {
   guest: 0,
   user: 1,

@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { queryOptions } from '@tanstack/react-query';
 
-import { tenantApi } from '@/lib/api';
+import { api, tenantApi } from '@/lib/api';
 
 import type { RankingDimension, RankingHours } from './periods';
 
@@ -62,18 +62,19 @@ export interface RankingsData {
 }
 
 /**
- * GET ~/analytics/rankings. Tenant admins only (a lower role is refused with
- * 403, which surfaces as an error here, not as an empty board). The server
- * caches each (tenant, by, hours) for five minutes per pod.
+ * Which traffic the board covers. Absent = the caller's own tenant (the only
+ * view a non-root user has). `{ tenantId }` is the platform-root cross-tenant
+ * view: '' = every tenant, otherwise that one tenant.
  */
-export async function fetchRankings(
+export interface RankingScope {
+  tenantId: string;
+}
+
+function normalize(
+  d: Partial<RankingsData> | null,
   by: RankingDimension,
   hours: RankingHours,
-): Promise<RankingsData> {
-  const d = await tenantApi.get<Partial<RankingsData> | null>(
-    '/analytics/rankings',
-    { params: { by, hours } },
-  );
+): RankingsData {
   return {
     by: d?.by ?? by,
     hours: d?.hours ?? hours,
@@ -86,16 +87,94 @@ export async function fetchRankings(
   };
 }
 
+/**
+ * GET ~/analytics/rankings. Tenant admins only (a lower role is refused with
+ * 403, which surfaces as an error here, not as an empty board). The server
+ * caches each (tenant, by, hours) for five minutes per pod.
+ *
+ * With a `scope` it reads GET /api/v2/admin/analytics/rankings instead
+ * (platform root only; same response, optional `tenant_id` filter).
+ */
+export async function fetchRankings(
+  by: RankingDimension,
+  hours: RankingHours,
+  scope?: RankingScope,
+): Promise<RankingsData> {
+  if (scope) {
+    const params: Record<string, string | number> = { by, hours };
+    if (scope.tenantId) params.tenant_id = scope.tenantId;
+    const d = await api.get<Partial<RankingsData> | null>(
+      '/api/v2/admin/analytics/rankings',
+      { params },
+    );
+    return normalize(d, by, hours);
+  }
+  const d = await tenantApi.get<Partial<RankingsData> | null>(
+    '/analytics/rankings',
+    { params: { by, hours } },
+  );
+  return normalize(d, by, hours);
+}
+
 export const rankingsQueryOptions = (
   by: RankingDimension,
   hours: RankingHours,
+  scope?: RankingScope,
 ) =>
   queryOptions({
-    queryKey: ['rankings', by, hours],
-    queryFn: () => fetchRankings(by, hours),
+    queryKey: scope
+      ? ['rankings', 'admin', scope.tenantId, by, hours]
+      : ['rankings', by, hours],
+    queryFn: () => fetchRankings(by, hours, scope),
     // The server answer is cached for 5 minutes; asking sooner returns the
     // same snapshot and spends the critical rate limit.
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     retry: false,
   });
+
+/** One row of the root tenant picker (GET /api/v2/admin/tenants). */
+export interface TenantOption {
+  id: string;
+  name?: string;
+  slug?: string;
+}
+
+const TENANTS_PATH = '/api/v2/admin/tenants';
+const TENANT_PAGE_SIZE = 100;
+const MAX_TENANT_PAGES = 20;
+
+/**
+ * Tenant filter options for the root view. The list is a convenience, so a
+ * failure is not fatal to the board: the picker then offers "All tenants"
+ * only, with whatever pages were read before the failure.
+ */
+export async function fetchTenantOptions(): Promise<TenantOption[]> {
+  const out: TenantOption[] = [];
+  for (let page = 1; page <= MAX_TENANT_PAGES; page++) {
+    let body: { tenants?: TenantOption[]; total?: number } | null;
+    try {
+      body = await api.get<{ tenants?: TenantOption[]; total?: number } | null>(
+        TENANTS_PATH,
+        {
+          params: { page, page_size: TENANT_PAGE_SIZE },
+          skipAuthRedirect: true,
+        },
+      );
+    } catch {
+      break;
+    }
+    const rows = Array.isArray(body?.tenants) ? body.tenants : [];
+    out.push(...rows);
+    if (rows.length === 0 || out.length >= (body?.total ?? 0)) break;
+  }
+  return out;
+}
+
+export const tenantOptionsQuery = queryOptions({
+  queryKey: ['rankings', 'tenant-options'],
+  queryFn: fetchTenantOptions,
+  staleTime: 60_000,
+  retry: false,
+  meta: { errorToast: false },
+});

@@ -29,7 +29,7 @@ AI 数据处理枢纽 — Platform 产品组核心成员。在 New API 开源基
 | Layer | Tech |
 |-------|------|
 | Backend | Go 1.26.7, Gin, GORM |
-| Frontend | React 18, Vite, Semi UI (`web/`), Bun |
+| Frontend | React 19, TanStack Router/Query, shadcn + Tailwind 4, rsbuild (`web/next/`), Bun。旧 Semi UI 控制台(`web/src`)已于 2026-10 退役,`/console/*` 只做 302 跳到新页面 |
 | DB | PostgreSQL（runtime 唯一；glebarez SQLite 仅 hermetic 单测 tier） |
 | Cache | Redis — session + channel cache + quota sync all follow the DSN's DB (prod `/2`, UAT `/3`; see the "DB" line above) |
 | Search | Meilisearch (log full-text, 可选) |
@@ -62,7 +62,7 @@ deploy/k8s/                  # K8s manifests + staging overlay
 # --- Local Dev ---
 cp .env.example .env                        # 复制并填写 SQL_DSN, REDIS_CONN_STRING, SESSION_SECRET
 go run ./cmd/server                         # 后端 port 3000
-cd web && bun install && bun run dev        # 前端 port 5173 (代理到 3000)
+cd web/next && bun install && bun run dev   # 控制台 dev server(代理到 3000;连远端后端设 VITE_REACT_APP_SERVER_URL)
 # 多工作树并行跑 docker-compose.dev.yml / docker-compose.yml / docker-compose.meilisearch.yml：
 # 各设 COMPOSE_PROJECT_NAME + NEWHUB_HTTP_PORT / NEWHUB_DEV_REDIS_PORT / NEWHUB_DEV_PG_PORT /
 # NEWHUB_MEILISEARCH_PORT，避免容器名与宿主端口冲突
@@ -73,9 +73,8 @@ CGO_ENABLED=0 go build -ldflags "-s -w -X 'github.com/LurusTech/lurus-hub/intern
 # --- Frontend ---
 # NB: web/ has no `typecheck` script (plain JS, not TS) — `bun run typecheck`
 # has always failed here. Real gates: lint = prettier --check, plus eslint.
-cd web && bun run lint
-cd web && bun run eslint
-cd web && bun run build
+cd web/next && bun run typecheck && bun run lint && bun run test
+cd web/next && bun run build                # 产物 web/dist/next(+ site-root/ 拷到 web/dist 根)
 
 # --- Test ---
 go test -short ./...                        # 单元测试（跳过集成测试）
@@ -125,7 +124,7 @@ ssh root@100.122.83.20 "kubectl logs -n lurus-newhub deploy/lurus-newhub --tail=
 
 ## UAT Instance (2026-08-30 起)
 
-隔离 UAT 实例 `ns lurus-newhub-uat` / **NodePort 30851** / 域名 **`https://test-newhub.lurus.cn`**(2026-08-30 nginx 切换,原指生产 30850):独立 PG 库 `newhub_uat`、Redis DB 3、与生产**同 digest**(auto-pin 双写两个 manifest)。有意差异:OIDC/billing-unified/NATS 关、`E2E_BRIDGE_TOKEN` 开(bridge 登录;浏览器走 `/bridge-login`,`#t=<token>` 可一键进,见 `deploy/k8s/r6-uat/README.md`)、web 限流 600、注册关(`options.RegisterEnabled=false`,代码默认开)。session cookie host-only + **Secure**(⇒ 隧道 `http://localhost:30851` 的浏览器流会丢 cookie,浏览器/e2e 走域名;API 级隧道照旧)。真源 = `deploy/k8s/r6-uat/`(README 有对照表)。**e2e**:`cd web && E2E_BRIDGE_TOKEN=$(ssh … kubectl -n lurus-newhub-uat get secret …) bun run test:e2e`(E2E_BASE_URL 默认即 test-newhub 域;2026-08-30 域名双跑 33 passed/1 legit skip×2,状态幂等)。**CI 夜跑**:web-ci.yml schedule 19:00 UTC(03:00 北京)跑 e2e job,repo secret `E2E_BRIDGE_TOKEN`(R6 侧生成,轮换后要 `gh secret set` 同步)。
+隔离 UAT 实例 `ns lurus-newhub-uat` / **NodePort 30851** / 域名 **`https://test-newhub.lurus.cn`**(2026-08-30 nginx 切换,原指生产 30850):独立 PG 库 `newhub_uat`、Redis DB 3、与生产**同 digest**(auto-pin 双写两个 manifest)。有意差异:OIDC/billing-unified/NATS 关、`E2E_BRIDGE_TOKEN` 开(bridge 登录;浏览器走 `/bridge-login`,`#t=<token>` 可一键进,见 `deploy/k8s/r6-uat/README.md`)、web 限流 600、注册关(`options.RegisterEnabled=false`,代码默认开)。session cookie host-only + **Secure**(⇒ 隧道 `http://localhost:30851` 的浏览器流会丢 cookie,浏览器/e2e 走域名;API 级隧道照旧)。真源 = `deploy/k8s/r6-uat/`(README 有对照表)。**e2e**:`cd web/next && E2E_BRIDGE_TOKEN=$(ssh … kubectl -n lurus-newhub-uat get secret …) bun run test:e2e`(E2E_BASE_URL 默认即 test-newhub 域;2026-08-30 域名双跑 33 passed/1 legit skip×2,状态幂等)。**CI 夜跑**:web-ci.yml schedule 19:00 UTC(03:00 北京)跑 e2e job,repo secret `E2E_BRIDGE_TOKEN`(R6 侧生成,轮换后要 `gh secret set` 同步)。
 
 ## Environment Variables
 

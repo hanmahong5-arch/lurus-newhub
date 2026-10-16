@@ -169,6 +169,42 @@ describe('DashboardPage', () => {
     expect(screen.queryByTestId('kpi-balance')).toBeNull()
   }, 60_000)
 
+  it('shows the service-status panel from the configured monitors and hides it when none', async () => {
+    wire({ status: { uptime_kuma_enabled: true } })
+    const status = {
+      quota_per_unit: 500000,
+      quota_display_type: 'USD',
+      enable_data_export: true,
+      uptime_kuma_enabled: true,
+    }
+    const serve = (groups: unknown) =>
+      apiGet.mockImplementation((url: string) => {
+        if (url === '/api/status') return Promise.resolve(status)
+        if (url === '/api/uptime/status') return Promise.resolve(groups)
+        return Promise.resolve('')
+      })
+    serve([
+      {
+        categoryName: 'Core',
+        monitors: [{ name: 'Relay API', uptime: 1, status: 1 }],
+      },
+    ])
+    const { unmount } = renderPage()
+    expect(await screen.findByTestId('dashboard-uptime')).toHaveTextContent(
+      'Relay API'
+    )
+    unmount()
+    serve([])
+    renderPage()
+    await screen.findByTestId('dashboard-live')
+    await waitFor(() =>
+      expect(
+        apiGet.mock.calls.filter((c) => c[0] === '/api/uptime/status').length
+      ).toBeGreaterThan(1)
+    )
+    expect(screen.queryByTestId('dashboard-uptime')).toBeNull()
+  })
+
   it('refresh re-reads the live window', async () => {
     wire()
     const user = userEvent.setup()

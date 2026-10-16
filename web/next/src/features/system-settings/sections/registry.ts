@@ -23,6 +23,8 @@ import {
   FileText,
   Gauge,
   Globe,
+  Image as ImageIcon,
+  Mail,
   LayoutDashboard,
   Palette,
   Route,
@@ -47,6 +49,7 @@ import {
   QuotaSection,
   RelaySection,
 } from './operations'
+import { DrawingSection, EmailSection } from './integrations'
 import { GroupPricingSection, ModelPricingSection } from './pricing'
 import {
   BrandingSection,
@@ -173,6 +176,26 @@ export const SECTION_GROUPS: SectionGroup[] = [
         title: 'Relay',
         icon: Route,
         component: RelaySection,
+      },
+    ],
+  },
+  {
+    id: 'integrations',
+    title: 'Integrations',
+    sections: [
+      {
+        id: 'email',
+        title: 'Email (SMTP)',
+        description: 'Outgoing mail server, used for low-balance reminders.',
+        icon: Mail,
+        component: EmailSection,
+      },
+      {
+        id: 'drawing',
+        title: 'Drawing',
+        description: 'Image drawing switches and request handling.',
+        icon: ImageIcon,
+        component: DrawingSection,
       },
     ],
   },

@@ -26,7 +26,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { currentLocale } from '@/lib/locale';
 
-import { rankingsQueryOptions } from '../lib/api';
+import { rankingsQueryOptions, type RankingScope } from '../lib/api';
 import {
   hoursOf,
   periodCaption,
@@ -44,11 +44,14 @@ type ShareDimension = (typeof SHARE_DIMENSIONS)[number]['id'];
  * endpoint kind or billing unit. Vendor is deliberately not offered; it is a
  * platform-staff view and would reveal the supply chain.
  */
-export function MarketShareSection(props: { period: RankingPeriod }) {
+export function MarketShareSection(props: {
+  period: RankingPeriod;
+  scope?: RankingScope;
+}) {
   const { t, i18n } = useTranslation();
   const [dim, setDim] = useState<ShareDimension>('group');
   const hours = hoursOf(props.period);
-  const q = useQuery(rankingsQueryOptions(dim, hours));
+  const q = useQuery(rankingsQueryOptions(dim, hours, props.scope));
   const data = q.data;
   const label = t(SHARE_DIMENSIONS.find((d) => d.id === dim)?.label ?? dim);
 

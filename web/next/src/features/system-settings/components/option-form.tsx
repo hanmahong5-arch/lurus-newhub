@@ -27,6 +27,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { JsonCodeEditor } from '@/components/json-code-editor'
 import { Button } from '@/components/ui/button'
 import { FieldError } from '@/components/ui/field'
@@ -64,6 +65,19 @@ import {
 } from './settings-form-layout'
 import { SettingsPageFormActions } from './settings-page-context'
 
+/**
+ * Keys whose change must be confirmed before anything is sent (a value that
+ * rescales money everywhere). The dialog lists each guarded change as
+ * "old -> new"; cancelling sends nothing and keeps the edits.
+ */
+export type SaveGuard = {
+  keys: string[]
+  /** English source strings; translated at render time. */
+  title: string
+  description: string
+  confirmText: string
+}
+
 type OptionFormProps = {
   fields: OptionField[]
   /** Raw option map; defaults to the shared /api/option/ query. */
@@ -78,6 +92,7 @@ type OptionFormProps = {
    * and is validated and saved with the rest.
    */
   show?: (field: OptionField) => boolean
+  guard?: SaveGuard
 }
 
 /**
@@ -94,6 +109,7 @@ export function OptionForm({
   intro,
   saveLabel,
   show,
+  guard,
 }: OptionFormProps) {
   const { t } = useTranslation()
   const shared = useOptionMap()
@@ -104,6 +120,7 @@ export function OptionForm({
   const [edits, setEdits] = useState<Record<string, string>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
+  const [confirming, setConfirming] = useState(false)
 
   const baselines = useMemo(() => {
     const out: Record<string, string> = {}
@@ -144,7 +161,11 @@ export function OptionForm({
     setErrors({})
   }
 
-  const handleSave = async () => {
+  const guardedDirty = guard
+    ? dirtyFields.filter((field) => guard.keys.includes(field.key))
+    : []
+
+  const handleSave = async (confirmed = false) => {
     if (dirtyFields.length === 0) {
       toast.info(t('No changes to save'))
       return
@@ -157,6 +178,11 @@ export function OptionForm({
     if (Object.keys(found).length > 0) {
       setErrors(found)
       toast.error(t('Fix the highlighted fields before saving'))
+      return
+    }
+
+    if (guard && !confirmed && guardedDirty.length > 0) {
+      setConfirming(true)
       return
     }
 
@@ -285,6 +311,33 @@ export function OptionForm({
         </SettingsFormGrid>
         {children}
       </SettingsForm>
+      {guard ? (
+        <ConfirmDialog
+          open={confirming}
+          onOpenChange={setConfirming}
+          title={t(guard.title)}
+          desc={
+            <div className='flex flex-col gap-3'>
+              <p>{t(guard.description)}</p>
+              <ul className='flex flex-col gap-1 font-mono text-xs'>
+                {guardedDirty.map((field) => (
+                  <li key={field.key}>
+                    {t(field.label)}: {baselines[field.key] || '-'}
+                    {' -> '}
+                    {valueOf(field.key).trim()}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          }
+          confirmText={t(guard.confirmText)}
+          destructive
+          handleConfirm={() => {
+            setConfirming(false)
+            void handleSave(true)
+          }}
+        />
+      ) : null}
     </OptionDraftContext.Provider>
   )
 }

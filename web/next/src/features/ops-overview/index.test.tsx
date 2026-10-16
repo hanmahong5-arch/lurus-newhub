@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/lib/api-error'
@@ -50,10 +51,19 @@ interface Setup {
   summary?: unknown
   healthSummary?: unknown
   models?: unknown
+  /** Session user; defaults to platform staff below root. */
+  user?: Record<string, unknown>
+  /** GET /api/v2/admin/gateway/health body (or the error it rejects with). */
+  gateway?: unknown
 }
+
+const STAFF_USER = { id: 1, username: 'staff', role: 10 }
+const ROOT_USER = { id: 2, username: 'root', role: 100 }
+const GATEWAY_URL = '/api/v2/admin/gateway/health'
 
 function serve(s: Setup) {
   tGet.mockImplementation(async (path: string) => {
+    if (path === '/user/me') return s.user ?? STAFF_USER
     if (path === '/channels/usage-summary') {
       if (s.summary instanceof Error) throw s.summary
       return s.summary
@@ -64,7 +74,11 @@ function serve(s: Setup) {
     }
     throw new ApiError('not found', { status: 404 })
   })
-  aGet.mockImplementation(async () => {
+  aGet.mockImplementation(async (url: string) => {
+    if (url === GATEWAY_URL) {
+      if (s.gateway instanceof Error) throw s.gateway
+      return s.gateway
+    }
     if (s.models instanceof Error) throw s.models
     return s.models
   })
@@ -250,5 +264,132 @@ describe('OpsOverviewPage', () => {
     })
     renderPage()
     expect(await screen.findByTestId('probes-partial')).toBeInTheDocument()
+  })
+
+  describe('gateway health (platform root only)', () => {
+    const gateway = {
+      routes: [
+        {
+          channel_id: 7,
+          state: 'closed',
+          consecutive_fails: 0,
+          threshold: 5,
+          last_fail_unix: 0,
+          channel_name: 'chan-closed',
+          provider: 'openai',
+        },
+        {
+          channel_id: 9,
+          state: 'open',
+          consecutive_fails: 5,
+          threshold: 5,
+          last_fail_unix: NOW_SEC - 60,
+          probe_eligible_unix: NOW_SEC + 30,
+          channel_name: 'chan-open',
+          provider: 'claude',
+        },
+        {
+          channel_id: 8,
+          state: 'half_open',
+          consecutive_fails: 3,
+          threshold: 5,
+          last_fail_unix: NOW_SEC - 10,
+          probe_eligible_unix: NOW_SEC + 5,
+        },
+      ],
+      tracked: 3,
+      open: 1,
+      half_open: 1,
+      replica_scoped: true,
+      lazy_registered: true,
+    }
+    const base: Setup = {
+      summary: { window: '30d', since: 0, truncated: false, channels: [ch(1)] },
+      healthSummary: { channels: [], total: 0, truncated: false },
+      models: okModels,
+    }
+    const gatewayCalls = () =>
+      aGet.mock.calls.filter((c) => c[0] === GATEWAY_URL)
+
+    it('renders breaker counts, caveats and the routes, worst first', async () => {
+      serve({ ...base, user: ROOT_USER, gateway })
+      renderPage()
+      await screen.findByTestId('gateway-health')
+      expect(screen.getByTestId('gateway-tracked')).toHaveTextContent('3')
+      expect(screen.getByTestId('gateway-open')).toHaveTextContent('1')
+      expect(screen.getByTestId('gateway-half-open')).toHaveTextContent('1')
+      expect(screen.getByTestId('gateway-caveats')).toHaveTextContent(
+        'per replica'
+      )
+      expect(screen.getByTestId('gateway-caveats')).toHaveTextContent(
+        'unknown, not healthy'
+      )
+      const rows = within(screen.getByTestId('gateway-routes'))
+        .getAllByRole('row')
+        .slice(1)
+      expect(rows.map((r) => r.getAttribute('data-testid'))).toEqual([
+        'gateway-route-9',
+        'gateway-route-8',
+        'gateway-route-7',
+      ])
+      const open = screen.getByTestId('gateway-route-9')
+      expect(open).toHaveTextContent('chan-open')
+      expect(open).toHaveTextContent('claude')
+      expect(open).toHaveTextContent('Breaker open')
+      expect(open).toHaveTextContent('5 / 5')
+      const closed = screen.getByTestId('gateway-route-7')
+      expect(closed).toHaveTextContent('Breaker closed')
+      // never failed / no probe pending: a dash, not 1970
+      expect(closed).toHaveTextContent('--')
+      expect(closed).not.toHaveTextContent('1970')
+    })
+
+    it('says breaker state is unknown, not healthy, when no route is tracked', async () => {
+      serve({
+        ...base,
+        user: ROOT_USER,
+        gateway: { ...gateway, routes: [], tracked: 0, open: 0, half_open: 0 },
+      })
+      renderPage()
+      expect(await screen.findByTestId('gateway-empty')).toHaveTextContent(
+        'no breaker state is known'
+      )
+      expect(screen.queryByTestId('gateway-routes')).not.toBeInTheDocument()
+    })
+
+    it('shows a failed read as an error with retry, never as healthy', async () => {
+      serve({
+        ...base,
+        user: ROOT_USER,
+        gateway: new ApiError('gateway down', { status: 502 }),
+      })
+      renderPage()
+      const err = await screen.findByTestId('gateway-error')
+      expect(err).toHaveTextContent('Failed to load gateway health')
+      expect(err).toHaveTextContent('gateway down')
+      expect(screen.queryByTestId('gateway-health')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('gateway-open')).not.toBeInTheDocument()
+      // retry re-reads and recovers
+      serve({ ...base, user: ROOT_USER, gateway })
+      await userEvent.setup().click(within(err).getByRole('button'))
+      expect(await screen.findByTestId('gateway-health')).toBeInTheDocument()
+    })
+
+    it('rejects a body without routes instead of reading it as no open breakers', async () => {
+      serve({ ...base, user: ROOT_USER, gateway: { tracked: 0 } })
+      renderPage()
+      expect(await screen.findByTestId('gateway-error')).toBeInTheDocument()
+      expect(screen.queryByTestId('gateway-empty')).not.toBeInTheDocument()
+    })
+
+    it('renders nothing and makes no call for platform staff below root', async () => {
+      serve({ ...base, user: STAFF_USER, gateway })
+      renderPage()
+      await screen.findByTestId('usage-section')
+      await screen.findByTestId('model-status-list')
+      expect(screen.queryByText('Gateway health')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('gateway-health')).not.toBeInTheDocument()
+      expect(gatewayCalls()).toHaveLength(0)
+    })
   })
 })

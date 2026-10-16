@@ -111,12 +111,44 @@ function snapshot(by: string, hours: number) {
   };
 }
 
-function serve() {
-  get.mockImplementation(
-    async (_path: string, cfg?: { params?: { by: string; hours: number } }) =>
-      snapshot(cfg?.params?.by ?? 'model', cfg?.params?.hours ?? 168),
-  );
+const TENANT_USER = { id: 1, username: 'u', role: 1, tenant_role: 'admin' };
+const ROOT_USER = { id: 2, username: 'root', role: 100, tenant_role: 'admin' };
+const ADMIN_RANKINGS = '/api/v2/admin/analytics/rankings';
+const ADMIN_TENANTS = '/api/v2/admin/tenants';
+
+type Cfg = { params?: { by: string; hours: number; tenant_id?: string } };
+
+/** Tenant-scoped reads (`tenantApi.get`): the session user plus the board. */
+function serve(user: Record<string, unknown> = TENANT_USER) {
+  get.mockImplementation(async (path: string, cfg?: Cfg) => {
+    if (path === '/user/me') return user;
+    return snapshot(cfg?.params?.by ?? 'model', cfg?.params?.hours ?? 168);
+  });
 }
+
+/** Plain reads (`api.get`): the money config, the cross-tenant board, tenants. */
+function serveAdmin(opts: { board?: (cfg?: Cfg) => unknown } = {}) {
+  apiGet.mockImplementation(async (url: string, cfg?: Cfg) => {
+    if (url === ADMIN_RANKINGS) {
+      return opts.board
+        ? opts.board(cfg)
+        : snapshot(cfg?.params?.by ?? 'model', cfg?.params?.hours ?? 168);
+    }
+    if (url === ADMIN_TENANTS) {
+      return {
+        tenants: [
+          { id: 't-1', name: 'Acme', slug: 'acme' },
+          { id: 't-2', slug: 'globex' },
+        ],
+        total: 2,
+      };
+    }
+    return { quota_per_unit: 500000 };
+  });
+}
+
+const adminBoardCalls = () =>
+  apiGet.mock.calls.filter(([url]) => url === ADMIN_RANKINGS);
 
 describe('RankingsPage', () => {
   beforeEach(() => {
@@ -195,8 +227,8 @@ describe('RankingsPage', () => {
   });
 
   it('says so when there was no traffic instead of drawing empty charts', async () => {
-    get.mockImplementation(async (_p: string, cfg?: { params?: { by: string } }) => ({
-      ...snapshot(cfg?.params?.by ?? 'model', 168),
+    get.mockImplementation(async (p: string, cfg?: { params?: { by: string } }) => ({
+      ...(p === '/user/me' ? TENANT_USER : snapshot(cfg?.params?.by ?? 'model', 168)),
       rows: [],
       series: [],
       total_tokens: 0,
@@ -210,10 +242,15 @@ describe('RankingsPage', () => {
   });
 
   it('shows the server refusal, not an empty board, and retries', async () => {
-    get.mockRejectedValueOnce(
-      new ApiError('Admin role required', { status: 403 }),
-    );
-    serve();
+    let refused = true;
+    get.mockImplementation(async (path: string, cfg?: Cfg) => {
+      if (path === '/user/me') return TENANT_USER;
+      if (refused) {
+        refused = false;
+        throw new ApiError('Admin role required', { status: 403 });
+      }
+      return snapshot(cfg?.params?.by ?? 'model', cfg?.params?.hours ?? 168);
+    });
     renderPage();
     const err = await screen.findByTestId('rankings-error');
     expect(err).toHaveTextContent('Failed to load rankings');
@@ -221,5 +258,83 @@ describe('RankingsPage', () => {
     expect(screen.queryByTestId('rankings-model-table')).not.toBeInTheDocument();
     await userEvent.setup().click(within(err).getByRole('button'));
     expect(await screen.findByTestId('rankings-model-table')).toBeInTheDocument();
+  });
+
+  it('offers no scope switch to a non-root user and never calls the admin route', async () => {
+    serve();
+    serveAdmin();
+    renderPage();
+    await screen.findByTestId('rankings-model-table');
+    expect(screen.queryByTestId('rankings-scope')).not.toBeInTheDocument();
+    expect(screen.queryByText('All tenants')).not.toBeInTheDocument();
+    expect(adminBoardCalls()).toHaveLength(0);
+    expect(apiGet.mock.calls.some(([url]) => url === ADMIN_TENANTS)).toBe(false);
+  });
+
+  it('starts root on its own tenant, then reads the cross-tenant board on switch', async () => {
+    serve(ROOT_USER);
+    serveAdmin({
+      board: (cfg) => ({
+        ...snapshot(cfg?.params?.by ?? 'model', cfg?.params?.hours ?? 168),
+        rows: [row({ name: 'model-x', total_tokens: 9_000_000 })],
+      }),
+    });
+    renderPage();
+    expect(await screen.findByTestId('rankings-scope')).toBeInTheDocument();
+    await screen.findByTestId('rankings-model-table');
+    // own tenant first: the tenant route answered, the admin route is untouched
+    expect(adminBoardCalls()).toHaveLength(0);
+    const models = () => screen.getByTestId('rankings-model-table');
+    expect(within(models()).getByTestId('rank-row-model-a')).toBeInTheDocument();
+
+    await userEvent.setup().click(screen.getByTestId('rankings-scope-all'));
+    const x = await within(
+      await screen.findByTestId('rankings-model-table'),
+    ).findByTestId('rank-row-model-x');
+    expect(x).toHaveTextContent('9.00M');
+    expect(within(models()).queryByTestId('rank-row-model-a')).not.toBeInTheDocument();
+    const first = adminBoardCalls()[0][1] as Cfg;
+    expect(first.params).toEqual({ by: 'model', hours: 168 });
+    expect(first.params).not.toHaveProperty('tenant_id');
+    // the same period mapping applies on the admin route
+    await userEvent.setup().click(screen.getByTestId('rankings-period-month'));
+    await waitFor(() =>
+      expect(adminBoardCalls().map(([, c]) => (c as Cfg).params?.hours)).toContain(720),
+    );
+  });
+
+  it('filters the cross-tenant board to one tenant by tenant_id', async () => {
+    serve(ROOT_USER);
+    serveAdmin();
+    renderPage();
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('rankings-scope-all'));
+    const filter = await screen.findByTestId('rankings-scope-tenant-filter');
+    await waitFor(() =>
+      expect(within(filter).getByRole('option', { name: 'Acme' })).toBeInTheDocument(),
+    );
+    // a tenant without a display name falls back to its slug
+    expect(within(filter).getByRole('option', { name: 'globex' })).toBeInTheDocument();
+    await user.selectOptions(filter, 't-1');
+    await waitFor(() =>
+      expect(
+        adminBoardCalls().some(([, c]) => (c as Cfg).params?.tenant_id === 't-1'),
+      ).toBe(true),
+    );
+  });
+
+  it('shows a failed cross-tenant read as an error, not an empty board', async () => {
+    serve(ROOT_USER);
+    serveAdmin({
+      board: () => {
+        throw new ApiError('Failed to aggregate rankings', { status: 500 });
+      },
+    });
+    renderPage();
+    await screen.findByTestId('rankings-model-table');
+    await userEvent.setup().click(screen.getByTestId('rankings-scope-all'));
+    const err = await screen.findByTestId('rankings-error');
+    expect(err).toHaveTextContent('Failed to aggregate rankings');
+    expect(screen.queryByTestId('rankings-model-table')).not.toBeInTheDocument();
   });
 });

@@ -18,5 +18,9 @@ import "embed"
 //go:embed all:dist
 var BuildFS embed.FS
 
-//go:embed dist/index.html
+// IndexPage is the console's HTML document, served for every page URL. Naming
+// the file makes a binary without a console build fail to compile instead of
+// shipping a site with no front end (CI stubs this one file for Go-only jobs).
+//
+//go:embed dist/next/index.html
 var IndexPage []byte

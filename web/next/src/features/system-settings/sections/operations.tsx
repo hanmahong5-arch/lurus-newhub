@@ -20,10 +20,9 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { useQuota } from '@/hooks/use-quota'
-import { useStatus } from '@/hooks/use-status'
 
 import { LogCleanupCard } from '../components/log-cleanup-card'
-import { OptionForm } from '../components/option-form'
+import { OptionForm, type SaveGuard } from '../components/option-form'
 import { RateLimitGroupEditor } from '../components/rate-limit-group-editor'
 import type { OptionField } from '../lib/option-fields'
 import { validateRateLimitGroups } from '../lib/validators'
@@ -78,6 +77,16 @@ function useQuotaFields(): OptionField[] {
         hint,
       },
       {
+        kind: 'number',
+        key: 'PreConsumedQuota',
+        label: 'Pre-Consumed Quota',
+        description:
+          'Amount held back from the balance before a request runs, in quota units. The difference is settled when the request ends.',
+        integer: true,
+        min: 0,
+        hint,
+      },
+      {
         kind: 'switch',
         key: 'quota_setting.enable_free_model_pre_consume',
         label: 'Pre-Consume for Free Models',
@@ -120,10 +129,30 @@ const CURRENCY_FIELDS: OptionField[] = [
     description:
       'Real exchange rate between USD and CNY. It also converts quota into wallet money, so changing it changes what is charged.',
     positive: true,
-    max: 1000000,
+    max: 999999999,
     step: '0.01',
     visibleWhen: (draft) =>
       draft.str('general_setting.quota_display_type') !== 'TOKENS',
+  },
+  {
+    kind: 'number',
+    key: 'QuotaPerUnit',
+    label: 'Quota per USD',
+    description:
+      'How many quota units equal 1 USD. Every balance, price and charge is shown and converted through this number.',
+    positive: true,
+    max: 999999999,
+    step: 'any',
+  },
+  {
+    kind: 'number',
+    key: 'Price',
+    label: 'Display exchange price (CNY per USD)',
+    description:
+      'Exchange price published to the console and used to convert channel balances reported in CNY into USD.',
+    positive: true,
+    max: 999999999,
+    step: '0.01',
   },
   {
     kind: 'text',
@@ -154,22 +183,30 @@ const CURRENCY_FIELDS: OptionField[] = [
   },
 ]
 
+/** Values that rescale every money figure in the system. */
+const CURRENCY_GUARD: SaveGuard = {
+  keys: ['QuotaPerUnit', 'Price', 'USDExchangeRate'],
+  title: 'Change money conversion?',
+  description:
+    'These values rescale every balance, price and charge in the system, for all accounts, immediately. Check the new numbers before you continue.',
+  confirmText: 'Change conversion',
+}
+
 export function CurrencySection() {
   const { t } = useTranslation()
-  const { status } = useStatus()
-  const perUnit =
-    typeof status?.quota_per_unit === 'number' ? status.quota_per_unit : null
   return (
     <OptionForm
       fields={CURRENCY_FIELDS}
+      guard={CURRENCY_GUARD}
       intro={
-        <div className='bg-muted/40 text-muted-foreground rounded-lg border px-3 py-2 text-sm'>
-          {perUnit === null
-            ? t('Quota per unit is not available yet.')
-            : t(
-                'Quota per unit: {{value}} quota units equal 1 USD. This value is fixed by the server configuration and cannot be changed here.',
-                { value: perUnit.toLocaleString() }
-              )}
+        <div
+          role='note'
+          data-settings-form-span='full'
+          className='border-destructive/40 bg-destructive/10 text-destructive rounded-lg border px-3 py-2 text-sm'
+        >
+          {t(
+            'Quota per USD, the exchange price and the CNY rate change what every account sees and is charged. Change them only when you know the effect; saving asks for confirmation.'
+          )}
         </div>
       }
     />

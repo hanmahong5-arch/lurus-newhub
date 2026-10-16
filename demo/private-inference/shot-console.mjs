@@ -7,7 +7,7 @@
 //
 // Login is fully automated via the newhub e2e bridge
 // (internal/adapter/handler/v2_bridge.go, POST /api/v2/bridge/exchange) — the
-// same mechanism the web/tests/e2e Playwright suite uses. No manual browser
+// same mechanism the web/next/e2e Playwright suite uses. No manual browser
 // login or cookie export is needed. The bridge route only exists on a server
 // booted with E2E_BRIDGE_TOKEN set (see run-demo.sh / .env.demo); it is not
 // registered at all otherwise, so this has no prod exposure.
