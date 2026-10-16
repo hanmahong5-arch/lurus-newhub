@@ -95,11 +95,7 @@ func RedeemCodeV2(c *gin.Context) {
 	if err != nil {
 		// 400 for the caller's mistakes, 500 for a hub-side fault
 		// (REDEMPTION_FAILED) — see redemptionFailureStatus.
-		c.JSON(redemptionFailureStatus(err, http.StatusBadRequest), gin.H{
-			"success":    false,
-			"message":    repo.RedemptionErrorMessage(err),
-			"error_code": repo.RedemptionErrorCode(err),
-		})
+		c.JSON(redemptionFailureStatus(err, http.StatusBadRequest), redemptionFailureBody(err))
 		return
 	}
 

@@ -4,6 +4,9 @@ import (
 	"net/http"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+
+	"github.com/gin-gonic/gin"
 )
 
 // redemptionFailureStatus picks the HTTP status for a failed repo.Redeem.
@@ -18,8 +21,26 @@ import (
 // could tell the two apart; it is a 500 now (cycle-13 L3 acceptance minor,
 // closed in the hand-finish). error_code stays REDEMPTION_FAILED either way.
 func redemptionFailureStatus(err error, userStatus int) int {
-	if repo.RedemptionErrorCode(err) == repo.RedemptionErrorCodeFailed {
+	switch repo.RedemptionErrorCode(err) {
+	case repo.RedemptionErrorCodeFailed:
 		return http.StatusInternalServerError
+	case repo.RedemptionErrorCodeWalletLedger:
+		return http.StatusConflict
 	}
 	return userStatus
+}
+
+// redemptionFailureBody is the error envelope RedeemCodeV2 and
+// SwitchUserTopup answer. A wallet-ledger refusal also carries topup_url, the
+// platform wallet page where the user's money now goes.
+func redemptionFailureBody(err error) gin.H {
+	body := gin.H{
+		"success":    false,
+		"message":    repo.RedemptionErrorMessage(err),
+		"error_code": repo.RedemptionErrorCode(err),
+	}
+	if repo.RedemptionErrorCode(err) == repo.RedemptionErrorCodeWalletLedger && common.IdentityPublicURL != "" {
+		body["topup_url"] = common.IdentityPublicURL + "/wallet/topup"
+	}
+	return body
 }

@@ -79,6 +79,7 @@ func TestRedemptionErrorCode_MapsToTaxonomy(t *testing.T) {
 		{"expired", ErrRedemptionExpired, RedemptionErrorCodeExpired},
 		{"wrong_tenant", ErrRedemptionWrongTenant, RedemptionErrorCodeTenantMismatch},
 		{"failed", ErrRedemptionFailed, RedemptionErrorCodeFailed},
+		{"wallet_ledger", ErrRedemptionWalletLedger, RedemptionErrorCodeWalletLedger},
 		{"user_not_found_folds_to_failed", ErrRedemptionUserNotFound, RedemptionErrorCodeFailed},
 		{"unknown_folds_to_failed", errors.New("some raw driver text"), RedemptionErrorCodeFailed},
 	}
@@ -302,5 +303,53 @@ func TestRedeemSentinelsClassifyOnTheSwitchClient(t *testing.T) {
 				t.Errorf("classifySwitchRedeemFailure(%q) = %q, want %q", tc.text, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestRedeem_WalletLedgerRefusesLinkedUser: once the platform wallet is the
+// only balance (unified billing + advisory local ledger), a platform-linked
+// user's code is refused and stays unused, while an unlinked user still
+// redeems into users.quota as before.
+func TestRedeem_WalletLedgerRefusesLinkedUser(t *testing.T) {
+	cleanup := setupSQLiteDB(t)
+	defer cleanup()
+
+	prevUnified, prevAdvisory := common.BillingUnifiedEnabled(), common.LocalLedgerAdvisory()
+	t.Cleanup(func() {
+		common.SetBillingUnifiedEnabled(prevUnified)
+		common.SetLocalLedgerAdvisory(prevAdvisory)
+	})
+
+	linked := seedUser(t, "redeem_wallet_linked", "redeemwalletlinked@test.com", common.RoleCommonUser, common.UserStatusEnabled, "default")
+	accountID := int64(4242)
+	if err := DB.Model(&User{}).Where("id = ?", linked.Id).Update("lurus_account_id", accountID).Error; err != nil {
+		t.Fatalf("link user: %v", err)
+	}
+	unlinked := seedUser(t, "redeem_wallet_unlinked", "redeemwalletunlinked@test.com", common.RoleCommonUser, common.UserStatusEnabled, "default")
+
+	common.SetBillingUnifiedEnabled(true)
+	common.SetLocalLedgerAdvisory(true)
+
+	code := seedRedemptionRow(t, linked.Id, "default", "wallet-ledger-linked", 1000)
+	if _, err := Redeem(code.Key, linked.Id); !errors.Is(err, ErrRedemptionWalletLedger) {
+		t.Fatalf("linked user: err = %v, want ErrRedemptionWalletLedger", err)
+	}
+	var after Redemption
+	if err := DB.Where("id = ?", code.Id).First(&after).Error; err != nil {
+		t.Fatalf("reload code: %v", err)
+	}
+	if after.Status != common.RedemptionCodeStatusEnabled {
+		t.Errorf("refused code status = %d, want still enabled", after.Status)
+	}
+
+	other := seedRedemptionRow(t, unlinked.Id, "default", "wallet-ledger-unlinked", 1000)
+	if q, err := Redeem(other.Key, unlinked.Id); err != nil || q != 1000 {
+		t.Errorf("unlinked user: quota=%d err=%v, want 1000 nil", q, err)
+	}
+
+	// Unified billing off: the wallet is not the ledger, linked users redeem.
+	common.SetBillingUnifiedEnabled(false)
+	if q, err := Redeem(code.Key, linked.Id); err != nil || q != 1000 {
+		t.Errorf("unified off: quota=%d err=%v, want 1000 nil", q, err)
 	}
 }
