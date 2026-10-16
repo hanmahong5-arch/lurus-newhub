@@ -42,6 +42,10 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/about", handler.GetAbout)
 		apiRouter.GET("/home_page_content", handler.GetHomePageContent)
 		apiRouter.GET("/pricing", handler.GetPricing)
+		// OpenRouter-shaped public model catalogue (USD per token, architecture,
+		// endpoints): same rows as /pricing, converted. See public_models.go.
+		apiRouter.GET("/v1/models", handler.ListPublicModels)
+		apiRouter.GET("/v1/models/*model", handler.GetPublicModel)
 		apiRouter.GET("/ratio_config", middleware.CriticalRateLimit(), handler.GetRatioConfig)
 
 		releaseRoute := apiRouter.Group("/releases")
