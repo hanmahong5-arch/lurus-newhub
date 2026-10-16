@@ -474,14 +474,12 @@ func DebitWallet(ctx context.Context, accountID int64, amount float64, txType, d
 	defer resp.Body.Close()
 
 	if mayCarryInsufficientBalance(resp.StatusCode) {
-		var errResp struct {
-			Error string `json:"error"`
-		}
-		// Same sentinel PreAuthorize returns, so a caller that classifies with
+		// Same sentinel PreAuthorize returns (enriched with the platform's
+		// top-up link when present), so a caller that classifies with
 		// errors.Is gets the same answer whichever wallet call produced it.
 		// The body code decides, whether the platform sent it as 400, 402 or 409.
-		if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil && errResp.Error == insufficientBalanceCode {
-			return nil, ErrInsufficientBalance
+		if eb := parsePlatformErrorBody(resp.Body); eb.Error == insufficientBalanceCode {
+			return nil, eb.insufficientBalanceErr()
 		}
 		return nil, fmt.Errorf("debit failed: status %d", resp.StatusCode)
 	}

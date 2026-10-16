@@ -52,6 +52,24 @@ func ErrOptionWithTopupURL() NewAPIErrorOptions {
 	}
 }
 
+// ErrOptionWithPlatformTopupURL is ErrOptionWithTopupURL plus, when the
+// platform supplied its own top-up link on the insufficient_balance it
+// answered (common.PlatformTopupURL), that link verbatim under
+// "platform_topup_url". Additive: with an empty platformURL the metadata is
+// byte-identical to ErrOptionWithTopupURL's, and topup_url is never changed.
+func ErrOptionWithPlatformTopupURL(platformURL string) NewAPIErrorOptions {
+	if platformURL == "" {
+		return ErrOptionWithTopupURL()
+	}
+	return func(e *NewAPIError) {
+		raw, _ := json.Marshal(map[string]string{
+			"topup_url":          common.IdentityPublicURL + walletTopupPath,
+			"platform_topup_url": platformURL,
+		})
+		e.Metadata = json.RawMessage(raw)
+	}
+}
+
 // ErrOptionWithTokenQuotaHint attaches structured metadata for a per-TOKEN
 // spending-cap 402 (HTTP 402, ErrorCodeTokenQuotaExhausted): the token's own
 // remain_quota, NOT a wallet top-up link. Unlike ErrOptionWithTopupURL, a

@@ -171,6 +171,29 @@ func TestPreConsumeQuota_PlatformPreAuthFailure_ShapeByCause(t *testing.T) {
 	}
 }
 
+// lurus-platform #106: an insufficient_balance carrying the platform's own
+// top-up link must reach the API caller verbatim as
+// error.metadata.platform_topup_url, next to the unchanged topup_url; without
+// a platform link the metadata has no such key.
+func TestPreConsumeQuota_InsufficientBalance_PassesPlatformTopupURL(t *testing.T) {
+	const link = "https://identity.lurus.cn/topup"
+	meta := errorMetadata(t, preAuthFailing(t, &common.InsufficientBalanceError{TopupURL: link}))
+	if got := meta["platform_topup_url"]; got != link {
+		t.Errorf("platform_topup_url = %v, want %q (metadata %v)", got, link, meta)
+	}
+	if got := meta["topup_url"]; got != common.IdentityPublicURL+"/wallet/topup" {
+		t.Errorf("topup_url = %v, must be unchanged", got)
+	}
+
+	bare := errorMetadata(t, preAuthFailing(t, common.ErrInsufficientBalance))
+	if _, present := bare["platform_topup_url"]; present {
+		t.Errorf("platform_topup_url must be absent when the platform sent no link, got %v", bare)
+	}
+	if len(bare) != 1 {
+		t.Errorf("bare-sentinel metadata = %v, want only topup_url (unchanged shape)", bare)
+	}
+}
+
 // TestPlatformPreAuthIDClearedOnlyAtTheHoldsTwoExits is the source gate for
 // the de-duplication: a pre-auth hold ends in exactly two ways — abandoned
 // (released, or parked for release) or settled (or parked for settlement) —
