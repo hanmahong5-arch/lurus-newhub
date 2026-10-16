@@ -130,6 +130,12 @@ type RelayInfo struct {
 	// input.
 	EmployeeRef      string
 	WalletChargeCNY4 int64 // wallet charge PostConsumeQuota committed to, 0.0001 CNY (-> entity.Log.ChargedCNY4)
+	// UpstreamCostUSD is what the upstream itself billed for this request,
+	// when it says so (OpenRouter's usage.cost). UpstreamCostKnown separates
+	// "free" from "not reported": the platform usage mirror omits the cost
+	// when it is unknown rather than reporting 0.
+	UpstreamCostUSD   float64
+	UpstreamCostKnown bool
 	// SessionId is the caller-supplied X-Session-Id header, validated
 	// (printable ASCII, <=200 bytes) but never hashed: unlike EndUserHash it
 	// carries no persistent user identity, only a conversation-scoped

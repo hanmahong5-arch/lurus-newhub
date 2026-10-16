@@ -363,6 +363,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 }
 
 func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage) {
+	RecordUpstreamCost(relayInfo, usage)
 
 	useTimeSeconds := time.Now().Unix() - relayInfo.StartTime.Unix()
 	promptTokens := usage.PromptTokens
@@ -1070,6 +1071,15 @@ func mirrorUsageEvent(ctx context.Context, relayInfo *relaycommon.RelayInfo, acc
 	}
 	if preAuthID > 0 {
 		meta["preauth_id"] = preAuthID
+	}
+	// Cost side for the platform's per-product/per-model margin report:
+	// which channel served the call, and what the upstream charged — only
+	// when the upstream reported it (an unknown cost is omitted, never 0).
+	if relayInfo.ChannelMeta != nil && relayInfo.ChannelId > 0 {
+		meta["channel_id"] = relayInfo.ChannelId
+	}
+	if relayInfo.UpstreamCostKnown {
+		meta["upstream_cost_cny"] = upstreamCostCNY(relayInfo.UpstreamCostUSD)
 	}
 	if rptErr := common.ReportUsageEvent(ctx, accountID, sourceProductOf(relayInfo), "llm_relay",
 		int64(totalQuota), idemKey, meta); rptErr != nil {
