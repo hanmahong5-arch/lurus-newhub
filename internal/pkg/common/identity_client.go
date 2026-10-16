@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -25,10 +26,6 @@ func getIdentityServiceURL() string {
 // IdentityServiceInternalKey is the bearer token for /internal/v1/* endpoints.
 var IdentityServiceInternalKey = os.Getenv("IDENTITY_SERVICE_INTERNAL_KEY")
 
-// IdentityAuthRedirect controls whether register/login/topup endpoints redirect to identity service.
-// Set IDENTITY_AUTH_REDIRECT=true to enable.
-var IdentityAuthRedirect = os.Getenv("IDENTITY_AUTH_REDIRECT") == "true"
-
 // RefreshIdentityClientEnv re-reads the identity/session/billing env vars whose
 // package-level initializers run at program init — BEFORE main() calls
 // godotenv.Load(".env"). Without this refresh, any of these vars set only in a
@@ -36,7 +33,6 @@ var IdentityAuthRedirect = os.Getenv("IDENTITY_AUTH_REDIRECT") == "true"
 // (K8s) is honoured either way. Call once, right after godotenv.Load succeeds.
 func RefreshIdentityClientEnv() {
 	IdentityServiceInternalKey = os.Getenv("IDENTITY_SERVICE_INTERNAL_KEY")
-	IdentityAuthRedirect = os.Getenv("IDENTITY_AUTH_REDIRECT") == "true"
 	IdentitySessionSecret = os.Getenv("IDENTITY_SESSION_SECRET")
 	SetBillingUnifiedEnabled(os.Getenv("BILLING_UNIFIED_ENABLED") == "true")
 	SetLocalLedgerAdvisory(os.Getenv("LOCAL_LEDGER_ADVISORY") == "true")
@@ -98,7 +94,46 @@ func (m *IdentityMapping) UnmarshalJSON(data []byte) error {
 }
 
 // Entitlements is a key→value map describing an account's product permissions.
+//
+// platform's GET /internal/v1/accounts/:id/entitlements/:product_id emits a
+// flat map[string]string today (plan features such as plan_code / daily_quota /
+// model_group, or {"plan_code":"free"} when there is none). UnmarshalJSON below
+// also accepts non-string scalars so that a future numeric/bool value (e.g.
+// "quota_remaining": 0) is stringified instead of failing the whole decode —
+// a decode failure degrades GetEntitlements to {"plan_code":"free"}, which
+// would make every key-based gate (middleware.EntitlementCheck) fail OPEN.
 type Entitlements map[string]string
+
+// UnmarshalJSON decodes a JSON object whose values may be strings, numbers,
+// booleans or null. Strings are kept verbatim, numbers keep their literal text
+// (so "0" and 0 are equivalent for GetInt), booleans become "true"/"false",
+// null values are dropped, and nested objects/arrays keep their raw JSON text.
+func (e *Entitlements) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	out := make(Entitlements, len(raw))
+	for k, v := range raw {
+		v = bytes.TrimSpace(v)
+		if len(v) == 0 || bytes.Equal(v, []byte("null")) {
+			continue
+		}
+		switch v[0] {
+		case '"':
+			var str string
+			if err := json.Unmarshal(v, &str); err != nil {
+				return err
+			}
+			out[k] = str
+		default:
+			// number / true / false / object / array: keep the literal text.
+			out[k] = string(v)
+		}
+	}
+	*e = out
+	return nil
+}
 
 // GetString returns a string entitlement value, falling back to defaultVal.
 func (e Entitlements) GetString(key, defaultVal string) string {
@@ -330,7 +365,7 @@ func GetAccountByEmail(ctx context.Context, email string) (*IdentityMapping, err
 	}
 	req, err := http.NewRequestWithContext(ctx,
 		http.MethodGet,
-		IdentityServiceURL+"/internal/v1/accounts/by-email/"+email,
+		IdentityServiceURL+"/internal/v1/accounts/by-email/"+url.PathEscape(email),
 		nil,
 	)
 	if err != nil {
@@ -359,13 +394,21 @@ func GetAccountByEmail(ctx context.Context, email string) (*IdentityMapping, err
 }
 
 // GetAccountByZitadelSub_ByAccountID retrieves account info from lurus-platform by account ID.
-// Used to resolve identity session tokens to zitadel_sub for user mapping lookup.
+// Used to resolve identity session tokens to the IdP subject for user mapping lookup.
+//
+// It calls GET /internal/v1/accounts/by-id/:id (scope account:read), which
+// returns the full platform entity.Account — including idp_subject (emitted by
+// Account.MarshalJSON) alongside the deprecated zitadel_sub, plus email and
+// status. It must NOT use /accounts/:id/overview: that endpoint's
+// AccountSummary only carries id / lurus_id / display_name / avatar_url, so the
+// subject was always empty and the platform session-token branch of
+// middleware auth never resolved a user.
 func GetAccountByZitadelSub_ByAccountID(ctx context.Context, accountID int64) (*IdentityMapping, error) {
 	if IdentityServiceURL == "" {
 		return nil, nil
 	}
-	url := fmt.Sprintf("%s/internal/v1/accounts/%d/overview", IdentityServiceURL, accountID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	endpoint := fmt.Sprintf("%s/internal/v1/accounts/by-id/%d", IdentityServiceURL, accountID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, nil
 	}
@@ -379,39 +422,18 @@ func GetAccountByZitadelSub_ByAccountID(ctx context.Context, accountID int64) (*
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode != http.StatusNotFound {
+			SysLog(fmt.Sprintf("identity GetAccountByAccountID: status %d", resp.StatusCode))
+		}
 		return nil, nil
 	}
-	// The overview endpoint returns a nested structure; extract the account part.
-	// Accept both idp_subject (canonical) and zitadel_sub (deprecated) for the
-	// subject during the platform migration window.
-	var ov struct {
-		Account struct {
-			ID          int64  `json:"id"`
-			LurusID     string `json:"lurus_id"`
-			IDPSubject  string `json:"idp_subject"`
-			ZitadelSub  string `json:"zitadel_sub"`
-			Email       string `json:"email"`
-			DisplayName string `json:"display_name"`
-			AvatarURL   string `json:"avatar_url"`
-			Status      int16  `json:"status"`
-		} `json:"account"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&ov); err != nil {
+	// IdentityMapping.UnmarshalJSON accepts idp_subject (canonical) and falls
+	// back to zitadel_sub (deprecated) during the platform migration window.
+	var a IdentityMapping
+	if err := json.NewDecoder(resp.Body).Decode(&a); err != nil {
 		return nil, nil
 	}
-	subject := ov.Account.IDPSubject
-	if subject == "" {
-		subject = ov.Account.ZitadelSub
-	}
-	return &IdentityMapping{
-		ID:          ov.Account.ID,
-		LurusID:     ov.Account.LurusID,
-		ZitadelSub:  subject,
-		Email:       ov.Account.Email,
-		DisplayName: ov.Account.DisplayName,
-		AvatarURL:   ov.Account.AvatarURL,
-		Status:      ov.Account.Status,
-	}, nil
+	return &a, nil
 }
 
 // DebitWalletResult holds the response from a wallet debit call.
@@ -758,7 +780,10 @@ func ListWalletTransactionsHTTP(ctx context.Context, accountID int64, page, page
 	if pageSize <= 0 || pageSize > 200 {
 		pageSize = 20
 	}
-	url := fmt.Sprintf("%s/internal/v1/accounts/%d/wallet/transactions?p=%d&page_size=%d",
+	// platform's parsePagination reads `page` / `page_size` (NOT this repo's
+	// own `p=` convention — sending `p` silently pinned every request to page 1)
+	// and clamps page_size to 100.
+	url := fmt.Sprintf("%s/internal/v1/accounts/%d/wallet/transactions?page=%d&page_size=%d",
 		IdentityServiceURL, accountID, page, pageSize)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {

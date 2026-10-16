@@ -146,6 +146,70 @@ func TestEntitlementCheck_LiveFetch_QuotaExhausted_429(t *testing.T) {
 	}
 }
 
+// A numeric (non-string) quota_remaining must deny exactly like the string
+// form: before Entitlements tolerated non-string values, the decode error
+// degraded to {"plan_code":"free"} and the gate failed OPEN.
+func TestEntitlementCheck_LiveFetch_NumericQuotaExhausted_429(t *testing.T) {
+	const acct = int64(990078)
+	key := entitlementCacheKey{accountID: acct, product: ratio_setting.DefaultSourceProduct}
+	entitlementCache.Delete(key)
+	defer entitlementCache.Delete(key)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"plan_code":"pro","quota_remaining":0}`))
+	}))
+	defer srv.Close()
+
+	prevURL := common.IdentityServiceURL
+	common.IdentityServiceURL = srv.URL
+	defer func() { common.IdentityServiceURL = prevURL }()
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("identity_account_id", acct); c.Next() })
+	r.GET("/e", EntitlementCheck(), func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/e", nil))
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429 for numeric quota_remaining=0; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// What platform actually emits today (plan features, or {"plan_code":"free"})
+// carries no quota_remaining key, so the gate allows. Pinned so a change to
+// that (currently inert) behaviour is deliberate, not accidental.
+func TestEntitlementCheck_PlatformShapeToday_Allows(t *testing.T) {
+	for i, body := range []string{
+		`{"plan_code":"free"}`,
+		`{"plan_code":"team","daily_quota":"1000","model_group":"team"}`,
+	} {
+		acct := int64(990090 + i)
+		key := entitlementCacheKey{accountID: acct, product: ratio_setting.DefaultSourceProduct}
+		entitlementCache.Delete(key)
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(body))
+		}))
+		prevURL := common.IdentityServiceURL
+		common.IdentityServiceURL = srv.URL
+
+		r := gin.New()
+		r.Use(func(c *gin.Context) { c.Set("identity_account_id", acct); c.Next() })
+		r.GET("/e", EntitlementCheck(), func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/e", nil))
+
+		common.IdentityServiceURL = prevURL
+		srv.Close()
+		entitlementCache.Delete(key)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("body %s: status = %d, want 200", body, w.Code)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // pool_balance_check.go: transient DB error → fail open (:55)
 // ---------------------------------------------------------------------------

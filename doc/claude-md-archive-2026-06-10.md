@@ -23,7 +23,7 @@
 | `IDENTITY_GRPC_ADDR` | `platform-core.lurus-platform.svc.cluster.local:18105` | gRPC 地址（自动 HTTP fallback） |
 | `IDENTITY_SERVICE_INTERNAL_KEY` | — | platform `/internal/v1/*` bearer token |
 | `IDENTITY_SESSION_SECRET` | — | 与 lurus-platform 共享的 session token 验签密钥 |
-| `IDENTITY_AUTH_REDIRECT` | `false` | `true` → register/login/topup 重定向到 identity |
+| ~~`IDENTITY_AUTH_REDIRECT`~~ | — | 已删除(2026-10):变量被读取但从无任何消费方 |
 | `IDENTITY_PUBLIC_URL` | `https://identity.lurus.cn` | 用于 redirect URL 构造 |
 
 ### Zitadel OIDC (v2 API)

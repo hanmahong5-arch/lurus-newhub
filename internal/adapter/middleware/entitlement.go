@@ -34,6 +34,8 @@ var entitlementCache sync.Map // map[entitlementCacheKey]entitlementEntry
 // EntitlementCheck validates that the caller has remaining quota on the
 // platform entitlement system before forwarding to upstream LLM providers.
 // Skips gracefully for legacy users without a platform account ID.
+// NOTE: currently inert — platform does not emit quota_remaining; see the
+// comment at the decision below.
 //
 // The product it asks the platform about is resolved PER REQUEST from
 // X-Lurus-Product (same allow-list and fallback as the relay's wallet debit,
@@ -81,6 +83,18 @@ func EntitlementCheck() gin.HandlerFunc {
 
 		// quota_remaining: -1 = unlimited (paid plan), 0 = exhausted, >0 = remaining.
 		// plan_code: "free" indicates free tier with limited quota.
+		//
+		// CURRENTLY INERT (verified against lurus-platform 2026-10): platform's
+		// GET /internal/v1/accounts/:id/entitlements/:product_id
+		// (internal_api.go GetEntitlements → EntitlementService.GetForAccountWithOrgs)
+		// returns the account's plan-feature map (plan_code, daily_quota,
+		// model_group, …) or {"plan_code":"free"} — it never emits
+		// quota_remaining, so this always resolves to -1 and the gate never
+		// denies. It activates the moment platform adds a "quota_remaining" key
+		// (string or number; common.Entitlements tolerates both) whose value is
+		// 0 for an exhausted account. Deliberately NOT re-keyed onto plan_code /
+		// daily_quota here: guessing semantics on this side could lock out
+		// paying users — that contract has to be defined platform-side first.
 		quotaRemaining := ent.GetInt("quota_remaining", -1)
 		allowed := quotaRemaining != 0
 
