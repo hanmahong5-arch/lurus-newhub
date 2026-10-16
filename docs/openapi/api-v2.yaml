@@ -62,7 +62,7 @@ tags:
   - name: Channels
     description: LLM provider channel management
   - name: Routing
-    description: Decision-routing policies
+    description: Routing policies (decision and fallback strategies)
   - name: Tokens
     description: API token management
   - name: ChatSessions
@@ -1372,8 +1372,8 @@ paths:
     get:
       tags:
         - "Routing"
-      summary: "Get Decision Routing Policy"
-      description: "Tenant-admin read of the decision-routing policy for one public model. The tenant is always the caller's own; another tenant's policy is simply not found."
+      summary: "Get Routing Policy"
+      description: "Tenant-admin read of the routing policy for one public model. The tenant is always the caller's own; another tenant's policy is simply not found."
       operationId: "getRoutingPolicyV2"
       security:
         - SessionAuth: []
@@ -1405,8 +1405,8 @@ paths:
     put:
       tags:
         - "Routing"
-      summary: "Create or Replace Decision Routing Policy"
-      description: "Creates or replaces the policy for one public model (tenant admin). Candidates: 1-32, criteria at most 2048 bytes each, instructions at most 4096 bytes, min_confidence within [0, 1] (omitted = 0.65). Every candidate model must be routable by the tenant. The change is audited as routing.policy_set."
+      summary: "Create or Replace Routing Policy"
+      description: "Creates or replaces the policy for one public model (tenant admin). strategy is 'decision' (default when omitted) or 'fallback'; any other value is a 400 INVALID_STRATEGY. Decision candidates: 1-32, criteria required and at most 2048 bytes each, instructions at most 4096 bytes, min_confidence within [0, 1] (omitted = 0.65). Every candidate model must be routable by the tenant. The change is audited as routing.policy_set. Strategy 'fallback' keeps the requested model while it is routable and moves to the first healthy candidate (candidates are an ORDERED list of 1-8; criteria optional; every candidate must differ from the public model) only when the requested model has no channel or every one of its channels has an open circuit breaker; evaluator_model, instructions, min_confidence and default_candidate are stored but ignored. Responses of a consulted request carry X-Routed-Model and X-Routing-Reason (fallback:primary_ok|no_channel|primary_unavailable|ineligible|no_candidate)."
       operationId: "putRoutingPolicyV2"
       security:
         - SessionAuth: []
@@ -1444,7 +1444,7 @@ paths:
     delete:
       tags:
         - "Routing"
-      summary: "Delete Decision Routing Policy"
+      summary: "Delete Routing Policy"
       description: "Removes the policy; the public model then routes without a decision step. Audited."
       operationId: "deleteRoutingPolicyV2"
       security:
@@ -3646,7 +3646,6 @@ components:
       required:
         - "id"
         - "model"
-        - "criteria"
       properties:
         id:
           type: "string"
@@ -3656,12 +3655,18 @@ components:
           description: "A public model this tenant can route (1-128 bytes)."
         criteria:
           type: "string"
-          description: "Natural-language criteria for choosing this candidate (required, at most 2048 bytes)."
+          description: "Natural-language criteria for choosing this candidate (at most 2048 bytes). Required by the decision strategy, optional for fallback."
     RoutingPolicyRequest:
       type: "object"
       required:
         - "candidates"
       properties:
+        strategy:
+          type: "string"
+          enum:
+            - "decision"
+            - "fallback"
+          description: "Omitted means decision. Any other value is rejected with 400 INVALID_STRATEGY."
         enabled:
           type: "boolean"
         evaluator_model:
@@ -3682,6 +3687,7 @@ components:
           type: "array"
           minItems: 1
           maxItems: 32
+          description: "Decision: 1-32 candidates. Fallback: 1-8 candidates in priority order."
           items:
             "$ref": "#/components/schemas/RoutingCandidate"
     RoutingPolicyResponse:
@@ -3698,6 +3704,7 @@ components:
               type: "string"
               enum:
                 - "decision"
+                - "fallback"
             enabled:
               type: "boolean"
             evaluator_model:
@@ -3722,6 +3729,8 @@ components:
               type: "object"
               properties:
                 max_candidates:
+                  type: "integer"
+                max_fallback_candidates:
                   type: "integer"
                 max_criteria_bytes:
                   type: "integer"

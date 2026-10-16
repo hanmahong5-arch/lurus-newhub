@@ -7,9 +7,17 @@ import (
 	"fmt"
 )
 
-// RoutingStrategyDecision is the only strategy today; the column is a varchar
-// so a second strategy would be a data change, not a migration.
-const RoutingStrategyDecision = "decision"
+// Routing strategies. The strategy column is a varchar, so adding one is a data
+// change, not a migration. A model has exactly one policy per tenant (unique
+// index), so a model is routed by decision OR by fallback, never both.
+const (
+	// RoutingStrategyDecision lets an evaluator model pick among candidates.
+	RoutingStrategyDecision = "decision"
+	// RoutingStrategyFallback keeps the requested model while it is routable
+	// and only moves to the first healthy candidate (an ORDERED list) when
+	// the requested model has no channel or every channel's breaker is open.
+	RoutingStrategyFallback = "fallback"
+)
 
 // DefaultRoutingMinConfidence is the code-side twin of the SQL default.
 const DefaultRoutingMinConfidence = 0.65

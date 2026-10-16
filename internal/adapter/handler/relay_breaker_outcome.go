@@ -1,6 +1,9 @@
 package handler
 
 import (
+	"context"
+	"errors"
+
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 )
@@ -31,13 +34,32 @@ import (
 // the handlers' incomplete-stream error (502/504), which IsUpstreamFailure
 // already counts: it used to arrive as nil and be recorded as a success.
 func reportBreakerOutcome(channelID int, err *types.NewAPIError, endReason string) {
+	reportBreakerOutcomeCtx(nil, channelID, err, endReason)
+}
+
+// reportBreakerOutcomeCtx is reportBreakerOutcome plus the request context,
+// which is the one witness that survives however many times an adaptor
+// re-wrapped its error as text: a body read cut short by the caller's hang-up
+// reaches here as an opaque 500 in several providers, while reqCtx.Err() still
+// says context.Canceled. A caller that is gone is not evidence about the
+// channel, so such an outcome is inconclusive whatever the error says, and it
+// is not a channel attempt in the traffic series either.
+//
+// Only Canceled counts. A reqCtx deadline is not treated as the caller leaving:
+// the gateway's own upstream timeout is a deadline too, and that one is a real
+// upstream failure. reqCtx may be nil (no context known), in which case only
+// the error's own chain (types.IsUpstreamFailure) decides.
+func reportBreakerOutcomeCtx(reqCtx context.Context, channelID int, err *types.NewAPIError, endReason string) {
+	callerGone := err != nil && (callerCanceled(reqCtx) || errors.Is(err, context.Canceled))
 	// The same single choke point feeds the per-channel traffic series
 	// (lurus_channel_requests_total / errors_total). A caller hang-up proved
 	// nothing about the channel, so it is not an attempt there either.
-	if err != nil || endReason != relaycommon.StreamEndClientGone {
+	if !callerGone && (err != nil || endReason != relaycommon.StreamEndClientGone) {
 		recordChannelAttempt(channelID, err)
 	}
 	switch {
+	case callerGone:
+		channelBreakers.RecordInconclusive(channelID)
 	case err == nil && endReason == relaycommon.StreamEndClientGone:
 		channelBreakers.RecordInconclusive(channelID)
 	case err == nil:
@@ -47,4 +69,8 @@ func reportBreakerOutcome(channelID int, err *types.NewAPIError, endReason strin
 	default:
 		channelBreakers.RecordInconclusive(channelID)
 	}
+}
+
+func callerCanceled(ctx context.Context) bool {
+	return ctx != nil && errors.Is(ctx.Err(), context.Canceled)
 }

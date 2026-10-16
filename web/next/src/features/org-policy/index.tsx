@@ -28,7 +28,7 @@ export function OrgPolicyPage() {
           <TabsTrigger value='models'>{t('Model allow-list')}</TabsTrigger>
           <TabsTrigger value='retention'>{t('Content retention')}</TabsTrigger>
           <TabsTrigger value='rules'>{t('Content rules')}</TabsTrigger>
-          <TabsTrigger value='routing'>{t('Decision routing')}</TabsTrigger>
+          <TabsTrigger value='routing'>{t('Model routing')}</TabsTrigger>
           <TabsTrigger value='archive'>{t('Data archiving')}</TabsTrigger>
           <TabsTrigger value='audit'>{t('Audit log')}</TabsTrigger>
         </TabsList>

@@ -31,8 +31,10 @@ package middleware
 //     "original_model" all carry the routed model.
 //
 // CLOSED STATE: with no enabled policy for (tenant, model) the function does
-// one atomic load and one map miss (routingdecision.Lookup) and returns - no
-// database access, no headers, no metrics, no body parsing.
+// two atomic loads and two map misses (routingdecision.Lookup, then
+// LookupFallback via applyFallbackRouting) and returns - no database access,
+// no headers, no metrics, no body parsing. The same call also serves the
+// "fallback" strategy: see fallback_routing.go.
 
 import (
 	"bytes"
@@ -83,6 +85,9 @@ func ApplyDecisionRouting(c *gin.Context, modelRequest *ModelRequest, tenantID s
 	}
 	pol := routingdecision.Lookup(tenantID, modelRequest.Model)
 	if pol == nil {
+		// A model has one policy per tenant, so no decision policy is the only
+		// case in which a fallback policy can apply (fallback_routing.go).
+		applyFallbackRouting(c, modelRequest, tenantID)
 		return
 	}
 	requested := modelRequest.Model

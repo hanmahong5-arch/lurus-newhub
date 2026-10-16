@@ -14,7 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Tenant-admin decision-routing policy (migration 054):
+// Tenant-admin routing policy (migration 054; strategies "decision" and "fallback"):
 //
 //	GET    /api/v2/:tenant_slug/routing-policies/:model
 //	PUT    /api/v2/:tenant_slug/routing-policies/:model
@@ -27,6 +27,9 @@ import (
 // segment, so a model name containing "/" cannot be addressed here.
 
 type routingPolicyRequest struct {
+	// Strategy is "decision" (default when omitted, so existing callers are
+	// unchanged) or "fallback"; anything else is rejected by validation.
+	Strategy         string                    `json:"strategy"`
 	Enabled          bool                      `json:"enabled"`
 	EvaluatorModel   string                    `json:"evaluator_model"`
 	Instructions     string                    `json:"instructions"`
@@ -52,9 +55,10 @@ func routingPolicyView(p *entity.RoutingPolicy) gin.H {
 		"created_at":        p.CreatedAt,
 		"updated_at":        p.UpdatedAt,
 		"limits": gin.H{
-			"max_candidates":         routingdecision.MaxCandidates,
-			"max_criteria_bytes":     routingdecision.MaxCriteriaBytes,
-			"max_instructions_bytes": routingdecision.MaxInstructionsBytes,
+			"max_candidates":          routingdecision.MaxCandidates,
+			"max_fallback_candidates": routingdecision.MaxFallbackCandidates,
+			"max_criteria_bytes":      routingdecision.MaxCriteriaBytes,
+			"max_instructions_bytes":  routingdecision.MaxInstructionsBytes,
 		},
 	}
 }
@@ -86,10 +90,14 @@ func PutRoutingPolicyV2(c *gin.Context) {
 		dpFail(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid routing policy body")
 		return
 	}
+	strategy := req.Strategy
+	if strategy == "" {
+		strategy = entity.RoutingStrategyDecision
+	}
 	p := &entity.RoutingPolicy{
 		TenantID:         tenantID,
 		PublicModel:      c.Param("model"),
-		Strategy:         entity.RoutingStrategyDecision,
+		Strategy:         strategy,
 		Enabled:          req.Enabled,
 		EvaluatorModel:   req.EvaluatorModel,
 		Instructions:     req.Instructions,
@@ -122,8 +130,8 @@ func PutRoutingPolicyV2(c *gin.Context) {
 	// the audit row records the shape of the change, not free text.
 	governance.RecordAuditEvent(governance.NewAuditEvent(c, governance.ActorUser, dpActor(c),
 		governance.ActionRoutingPolicySet, governance.ResourceRoutingPolicy, int(saved.ID),
-		fmt.Sprintf(`{"tenant_id":%q,"public_model":%q,"enabled":%t,"evaluator_model":%q,"candidates":%d,"min_confidence":%g,"default_candidate":%q}`,
-			tenantID, saved.PublicModel, saved.Enabled, saved.EvaluatorModel, len(saved.Candidates), saved.MinConfidence, saved.DefaultCandidate)))
+		fmt.Sprintf(`{"tenant_id":%q,"public_model":%q,"strategy":%q,"enabled":%t,"evaluator_model":%q,"candidates":%d,"min_confidence":%g,"default_candidate":%q}`,
+			tenantID, saved.PublicModel, saved.Strategy, saved.Enabled, saved.EvaluatorModel, len(saved.Candidates), saved.MinConfidence, saved.DefaultCandidate)))
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": routingPolicyView(saved)})
 }
 

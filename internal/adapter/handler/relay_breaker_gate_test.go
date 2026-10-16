@@ -14,7 +14,7 @@ import (
 // contains the `channelBreakers.Allow(...)` admission check, and walks the
 // statements that follow that check inside the loop body. Every `break` and
 // every `return` reachable from there must be preceded, in its own block or an
-// enclosing one, by a call to reportBreakerOutcome(...).
+// enclosing one, by a call to reportBreakerOutcomeCtx(...).
 //
 // WHY: the breaker hands out exactly one probe slot in HalfOpen. A path that
 // leaves the iteration without reporting keeps that slot forever, and the
@@ -30,7 +30,7 @@ import (
 //     cover that.
 //   - a report made indirectly (inside a helper this loop calls, or via a
 //     different registry method). It matches the literal identifier
-//     reportBreakerOutcome only.
+//     reportBreakerOutcomeCtx only (it passes the request context so a caller hang-up is never a channel failure).
 //   - exits that are not `break`/`return`: a panic, an os.Exit, a goroutine
 //     that outlives the iteration. Function literals are skipped entirely, so
 //     a `return` inside a closure is neither required to report nor accepted
@@ -42,7 +42,7 @@ func TestGate_EveryBreakerAdmittedPathReportsAnOutcome(t *testing.T) {
 	const (
 		file          = "relay.go"
 		admissionCall = "channelBreakers.Allow"
-		reportCall    = "reportBreakerOutcome"
+		reportCall    = "reportBreakerOutcomeCtx"
 	)
 
 	fset := token.NewFileSet()

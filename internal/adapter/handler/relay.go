@@ -498,7 +498,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			}
 			// The breaker admitted this request and no upstream was dialled —
 			// hand the slot back (413/400 are not the channel's fault).
-			reportBreakerOutcome(channel.Id, newAPIError, relayInfo.StreamEndReason)
+			reportBreakerOutcomeCtx(c.Request.Context(), channel.Id, newAPIError, relayInfo.StreamEndReason)
 			break
 		}
 		c.Request.Body = io.NopCloser(bytes.NewBuffer(requestBody))
@@ -562,7 +562,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		// Tell the breaker what became of the request it admitted — on every
 		// path, before any of the branches below can leave this iteration.
-		reportBreakerOutcome(channel.Id, newAPIError, relayInfo.StreamEndReason)
+		reportBreakerOutcomeCtx(c.Request.Context(), channel.Id, newAPIError, relayInfo.StreamEndReason)
 
 		if newAPIError == nil {
 			hub.RecordRelayOutcome(channel.Id, true, relayDuration,

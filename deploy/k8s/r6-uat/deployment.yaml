@@ -222,6 +222,11 @@ spec:
               value: "master"
             - name: SYNC_FREQUENCY
               value: "60"
+            # Circuit breaker: a run of upstream failures only trips a channel
+            # if the failures fall within 5 minutes of each other; older ones
+            # are forgotten (resilience.Config.FailureWindow, default off).
+            - name: CB_FAILURE_WINDOW_SEC
+              value: "300"
             # Cycle-13 pool ceiling, kept identical to r6-stage so UAT
             # exercises the same pool shape. replicas: 1 here, so 1 x 12 = 12
             # PostgreSQL connections against the MEASURED server budget

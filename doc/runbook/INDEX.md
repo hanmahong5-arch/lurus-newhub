@@ -84,6 +84,8 @@ do).
 | [platform-dependency-degraded](platform-dependency-degraded.md) | platform-core is down/slow, or any outbound dependency (Redis, NATS, webhook, bark/gotify, SMTP, provider admin calls) is hanging — what each caller does and the time bound it now has |
 | [graceful-drain](graceful-drain.md) | Tuning `GRACEFUL_SHUTDOWN_TIMEOUT`/`terminationGracePeriodSeconds`, or investigating a `graceful shutdown: budget exceeded` log line, a relay stream cut around a deploy window, or a `newhub_relay_5xx_elevated` WARNING that overlaps a rollout |
 | [privacy-erasure](privacy-erasure.md) | PIPL §47 账号擦除级联:六个步骤各处置了什么、`download_logs` 为什么不在级联里(写入时最小化)、以及 cycle-13 之前完成的请求需要一次性重放(O-erasure-backfill,带 SQL 配方与 4-eyes 要求) |
+| [circuit-breaker](circuit-breaker.md) | How the per-channel breaker decides: what counts as a failure (caller hang-ups do not), half-open probing, `CB_*` env incl. `CB_FAILURE_WINDOW_SEC`, reading `/api/v2/admin/gateway/health`, and what a client should do with 503 + `Retry-After` |
+| [routing-fallback](routing-fallback.md) | Opt-in cross-provider fallback (`routing_policies.strategy=fallback`): when the primary model has no channel or every channel's breaker is open, the request is rewritten to the first available backup model; headers, metric, billing |
 
 ## When to add a runbook
 
