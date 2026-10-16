@@ -39,8 +39,8 @@ func redemptionFailureBody(err error) gin.H {
 		"message":    repo.RedemptionErrorMessage(err),
 		"error_code": repo.RedemptionErrorCode(err),
 	}
-	if repo.RedemptionErrorCode(err) == repo.RedemptionErrorCodeWalletLedger && common.IdentityPublicURL != "" {
-		body["topup_url"] = common.IdentityPublicURL + "/wallet/topup"
+	if repo.RedemptionErrorCode(err) == repo.RedemptionErrorCodeWalletLedger {
+		body["topup_url"] = common.IdentityTopupURL()
 	}
 	return body
 }

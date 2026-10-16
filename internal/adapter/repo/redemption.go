@@ -151,7 +151,10 @@ const (
 	RedemptionErrorCodeExpired        = "REDEMPTION_EXPIRED"
 	RedemptionErrorCodeTenantMismatch = "REDEMPTION_TENANT_MISMATCH"
 	RedemptionErrorCodeFailed         = "REDEMPTION_FAILED"
-	RedemptionErrorCodeWalletLedger   = "REDEMPTION_WALLET_IS_LEDGER"
+	// RedemptionErrorCodeWalletLedger is deliberately not REDEMPTION_-prefixed:
+	// it is the same refusal InternalTopupBalance answers, so both money-in
+	// paths share one code (WALLET_IS_LEDGER) and one topup_url.
+	RedemptionErrorCodeWalletLedger = "WALLET_IS_LEDGER"
 )
 
 // Package-level sentinel errors Redeem() returns. Each is returned as-is

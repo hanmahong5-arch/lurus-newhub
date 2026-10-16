@@ -435,7 +435,8 @@ func InternalTopupBalance(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{
 			"success":    false,
 			"message":    "user balance is the platform wallet; credit the wallet instead",
-			"error_code": "WALLET_IS_LEDGER",
+			"error_code": repo.RedemptionErrorCodeWalletLedger,
+			"topup_url":  common.IdentityTopupURL(),
 		})
 		return
 	}

@@ -41,6 +41,14 @@ func RefreshIdentityClientEnv() {
 // IdentityPublicURL is the external-facing URL for lurus-platform (used in redirect responses).
 var IdentityPublicURL = getIdentityPublicURL()
 
+// IdentityTopupPath is the platform's wallet top-up page (its SPA route
+// "/topup"; "/wallet/topup" is not a route there and answers 404).
+const IdentityTopupPath = "/topup"
+
+// IdentityTopupURL is the one top-up link every newhub surface hands out:
+// API 402 metadata, the wallet endpoint, and money-in refusals.
+func IdentityTopupURL() string { return IdentityPublicURL + IdentityTopupPath }
+
 func getIdentityPublicURL() string {
 	if url := os.Getenv("IDENTITY_PUBLIC_URL"); url != "" {
 		return url

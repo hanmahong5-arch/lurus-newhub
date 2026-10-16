@@ -12,8 +12,6 @@ import (
 )
 
 const (
-	// walletTopupPath is the relative path appended to IdentityPublicURL for wallet top-up.
-	walletTopupPath = "/wallet/topup"
 	// pricingPath is the relative path appended to IdentityPublicURL for plan upgrade.
 	pricingPath = "/pricing"
 )

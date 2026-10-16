@@ -1760,8 +1760,9 @@ func TestInteg_Topup_WalletLedgerRefusesLinkedUser(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d, body: %s", w.Code, w.Body.String())
 	}
-	if resp := parseResponse(t, w); resp["error_code"] != "WALLET_IS_LEDGER" {
-		t.Errorf("error_code = %v, want WALLET_IS_LEDGER", resp["error_code"])
+	resp := parseResponse(t, w)
+	if resp["error_code"] != "WALLET_IS_LEDGER" || resp["topup_url"] != common.IdentityTopupURL() {
+		t.Errorf("error_code=%v topup_url=%v, want WALLET_IS_LEDGER and %s", resp["error_code"], resp["topup_url"], common.IdentityTopupURL())
 	}
 	after, _ := repo.GetUserQuota(2, true)
 	if after != before {

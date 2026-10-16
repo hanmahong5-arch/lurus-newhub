@@ -46,26 +46,22 @@ func IsRecordErrorLog(e *NewAPIError) bool {
 func ErrOptionWithTopupURL() NewAPIErrorOptions {
 	return func(e *NewAPIError) {
 		raw, _ := json.Marshal(map[string]string{
-			"topup_url": common.IdentityPublicURL + walletTopupPath,
+			"topup_url": common.IdentityTopupURL(),
 		})
 		e.Metadata = json.RawMessage(raw)
 	}
 }
 
-// ErrOptionWithPlatformTopupURL is ErrOptionWithTopupURL plus, when the
-// platform supplied its own top-up link on the insufficient_balance it
-// answered (common.PlatformTopupURL), that link verbatim under
-// "platform_topup_url". Additive: with an empty platformURL the metadata is
-// byte-identical to ErrOptionWithTopupURL's, and topup_url is never changed.
+// ErrOptionWithPlatformTopupURL is ErrOptionWithTopupURL with the link the
+// platform itself sent on its insufficient_balance (common.PlatformTopupURL),
+// when it sent one: the platform knows its own deployment's address best.
+// Either way the caller sees exactly one field, topup_url.
 func ErrOptionWithPlatformTopupURL(platformURL string) NewAPIErrorOptions {
 	if platformURL == "" {
 		return ErrOptionWithTopupURL()
 	}
 	return func(e *NewAPIError) {
-		raw, _ := json.Marshal(map[string]string{
-			"topup_url":          common.IdentityPublicURL + walletTopupPath,
-			"platform_topup_url": platformURL,
-		})
+		raw, _ := json.Marshal(map[string]string{"topup_url": platformURL})
 		e.Metadata = json.RawMessage(raw)
 	}
 }
