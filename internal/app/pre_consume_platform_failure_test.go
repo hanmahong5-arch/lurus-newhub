@@ -171,6 +171,22 @@ func TestPreConsumeQuota_PlatformPreAuthFailure_ShapeByCause(t *testing.T) {
 	}
 }
 
+// lurus-platform #106: an insufficient_balance carrying the platform's own
+// top-up link reaches the API caller as error.metadata.topup_url — one field,
+// the platform's link when it sent one, newhub's canonical link otherwise.
+func TestPreConsumeQuota_InsufficientBalance_PassesPlatformTopupURL(t *testing.T) {
+	const link = "https://id.customer.example/topup"
+	meta := errorMetadata(t, preAuthFailing(t, &common.InsufficientBalanceError{TopupURL: link}))
+	if got := meta["topup_url"]; got != link || len(meta) != 1 {
+		t.Errorf("metadata = %v, want only topup_url=%q", meta, link)
+	}
+
+	bare := errorMetadata(t, preAuthFailing(t, common.ErrInsufficientBalance))
+	if got := bare["topup_url"]; got != common.IdentityTopupURL() || len(bare) != 1 {
+		t.Errorf("bare-sentinel metadata = %v, want only topup_url=%q", bare, common.IdentityTopupURL())
+	}
+}
+
 // TestPlatformPreAuthIDClearedOnlyAtTheHoldsTwoExits is the source gate for
 // the de-duplication: a pre-auth hold ends in exactly two ways — abandoned
 // (released, or parked for release) or settled (or parked for settlement) —

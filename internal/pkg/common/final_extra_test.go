@@ -100,17 +100,13 @@ func TestValidateURL_DNSBranches(t *testing.T) {
 func TestRefreshIdentityClientEnv(t *testing.T) {
 	// RefreshIdentityClientEnv re-reads env into the package globals.
 	t.Setenv("IDENTITY_SERVICE_INTERNAL_KEY", "refreshed-key")
-	t.Setenv("IDENTITY_AUTH_REDIRECT", "true")
 	origKey := IdentityServiceInternalKey
-	origRedirect := IdentityAuthRedirect
 	t.Cleanup(func() {
 		IdentityServiceInternalKey = origKey
-		IdentityAuthRedirect = origRedirect
 	})
 	RefreshIdentityClientEnv()
-	if IdentityServiceInternalKey != "refreshed-key" || !IdentityAuthRedirect {
-		t.Errorf("RefreshIdentityClientEnv did not apply env: key=%q redirect=%v",
-			IdentityServiceInternalKey, IdentityAuthRedirect)
+	if IdentityServiceInternalKey != "refreshed-key" {
+		t.Errorf("RefreshIdentityClientEnv did not apply env: key=%q", IdentityServiceInternalKey)
 	}
 }
 

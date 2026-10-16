@@ -79,11 +79,7 @@ func SwitchUserTopup(c *gin.Context) {
 	// text, and RedemptionErrorMessage is defence in depth on top.
 	quota, err := repo.Redeem(key, token.UserId)
 	if err != nil {
-		c.JSON(redemptionFailureStatus(err, http.StatusBadRequest), gin.H{
-			"success":    false,
-			"message":    repo.RedemptionErrorMessage(err),
-			"error_code": repo.RedemptionErrorCode(err),
-		})
+		c.JSON(redemptionFailureStatus(err, http.StatusBadRequest), redemptionFailureBody(err))
 		return
 	}
 
