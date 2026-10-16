@@ -33,6 +33,7 @@ import { HistoryCard } from './components/history-card'
 import { RedeemCard } from './components/redeem-card'
 import { TopUpCard } from './components/top-up-card'
 import { WalletStats } from './components/wallet-stats'
+import { withReturnTo } from './lib/return-to'
 import type { CheckoutOrder } from './types'
 
 export function WalletPage() {
@@ -51,6 +52,8 @@ export function WalletPage() {
 
   const walletError = wallet.isError ? toApiError(wallet.error).message : null
   const topupUrl = wallet.data?.topup_url
+    ? withReturnTo(wallet.data.topup_url, window.location.href)
+    : undefined
 
   return (
     <>
