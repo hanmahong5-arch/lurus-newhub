@@ -113,7 +113,7 @@ func GetWalletInfo(c *gin.Context) {
 			"lifetime_spend":  bs.LifetimeSpend,
 			"active_preauths": bs.ActivePreAuths,
 			"pending_orders":  bs.PendingOrders,
-			"topup_url":       common.IdentityPublicURL + "/wallet/topup",
+			"topup_url":       common.IdentityTopupURL(),
 		},
 	})
 }

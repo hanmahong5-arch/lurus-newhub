@@ -202,7 +202,7 @@ func TestPreConsumeQuota_InsufficientLocalQuota_402_CarriesTopupURL(t *testing.T
 		t.Errorf("expected status 402, got %d", apiErr.StatusCode)
 	}
 
-	// Metadata must carry topup_url pointing at IdentityPublicURL + /wallet/topup.
+	// Metadata must carry topup_url pointing at the platform's /topup page.
 	if len(apiErr.Metadata) == 0 {
 		t.Fatal("expected non-empty Metadata on 402 insufficient-quota error")
 	}
@@ -214,8 +214,8 @@ func TestPreConsumeQuota_InsufficientLocalQuota_402_CarriesTopupURL(t *testing.T
 	if !ok {
 		t.Fatalf("Metadata missing 'topup_url' key; got: %s", string(apiErr.Metadata))
 	}
-	if !strings.HasSuffix(topupURL, "/wallet/topup") {
-		t.Errorf("topup_url %q should end with /wallet/topup", topupURL)
+	if topupURL != common.IdentityTopupURL() {
+		t.Errorf("topup_url %q, want %q", topupURL, common.IdentityTopupURL())
 	}
 	if !strings.HasPrefix(topupURL, common.IdentityPublicURL) {
 		t.Errorf("topup_url %q should start with IdentityPublicURL %q", topupURL, common.IdentityPublicURL)

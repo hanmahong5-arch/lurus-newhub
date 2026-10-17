@@ -151,6 +151,10 @@ const (
 	RedemptionErrorCodeExpired        = "REDEMPTION_EXPIRED"
 	RedemptionErrorCodeTenantMismatch = "REDEMPTION_TENANT_MISMATCH"
 	RedemptionErrorCodeFailed         = "REDEMPTION_FAILED"
+	// RedemptionErrorCodeWalletLedger is deliberately not REDEMPTION_-prefixed:
+	// it is the same refusal InternalTopupBalance answers, so both money-in
+	// paths share one code (WALLET_IS_LEDGER) and one topup_url.
+	RedemptionErrorCodeWalletLedger = "WALLET_IS_LEDGER"
 )
 
 // Package-level sentinel errors Redeem() returns. Each is returned as-is
@@ -221,6 +225,16 @@ var (
 	// ("服务暂不可用，请稍后重试") so TestSwitchRedeemAnonymous_RawDBErrorSanitized's
 	// expectation does not change.
 	ErrRedemptionFailed = errors.New("服务暂不可用，请稍后重试")
+
+	// ErrRedemptionWalletLedger refuses a local-quota credit for a user whose
+	// balance is the platform wallet (WalletIsLedger). Crediting users.quota
+	// there buys nothing: the wallet is the only gate, so the code would be
+	// burned for a shadow number. The code stays unused; the user tops up the
+	// wallet instead. English per the wire-message contract
+	// (wire_message_language_gate_test.go): clients localize from the
+	// WALLET_IS_LEDGER code and send the user to the topup_url beside it.
+	// The text also avoids the Switch classifier substrings on purpose.
+	ErrRedemptionWalletLedger = errors.New("this account's balance is the Lurus wallet; top up the wallet instead")
 )
 
 // knownRedemptionErrors is the set of sentinels Redeem() returns today
@@ -235,6 +249,7 @@ var knownRedemptionErrors = []error{
 	ErrRedemptionUserNotFound,
 	ErrRedemptionWrongTenant,
 	ErrRedemptionFailed,
+	ErrRedemptionWalletLedger,
 }
 
 // redeemKnownError reports whether err is (wraps) one of knownRedemptionErrors.
@@ -262,6 +277,8 @@ func RedemptionErrorCode(err error) string {
 		return RedemptionErrorCodeExpired
 	case errors.Is(err, ErrRedemptionWrongTenant):
 		return RedemptionErrorCodeTenantMismatch
+	case errors.Is(err, ErrRedemptionWalletLedger):
+		return RedemptionErrorCodeWalletLedger
 	default:
 		return RedemptionErrorCodeFailed
 	}
@@ -283,6 +300,19 @@ func RedemptionErrorMessage(err error) string {
 		return err.Error()
 	}
 	return ErrRedemptionFailed.Error()
+}
+
+// WalletIsLedger reports whether the platform wallet is the only balance for
+// platform-linked users of tenantID: unified billing on, and the local ledger
+// demoted (globally via billing.local_ledger_advisory, or per tenant via
+// tenants.wallet_authoritative). Money-in paths that credit users.quota
+// (redemption codes, internal top-up) refuse linked users while this holds,
+// so no payment lands in a ledger that no longer gates anything.
+func WalletIsLedger(tenantID string) bool {
+	if !common.BillingUnifiedEnabled() {
+		return false
+	}
+	return common.LocalLedgerAdvisory() || TenantWalletAuthoritative(tenantID)
 }
 
 func Redeem(key string, userId int) (quota int, err error) {
@@ -364,6 +394,9 @@ func Redeem(key string, userId int) (quota int, err error) {
 		if user.TenantId != redemption.TenantId {
 			common.SysError(fmt.Sprintf("Tenant mismatch in Redeem: redemption.TenantId=%s, user.TenantId=%s", redemption.TenantId, user.TenantId))
 			return ErrRedemptionWrongTenant
+		}
+		if user.LurusAccountID != nil && *user.LurusAccountID > 0 && WalletIsLedger(user.TenantId) {
+			return ErrRedemptionWalletLedger
 		}
 
 		err = tx.Model(&User{}).Where("id = ?", userId).Update("quota", gorm.Expr("quota + ?", redemption.Quota)).Error

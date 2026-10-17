@@ -49,7 +49,7 @@ var goSourceSizeCeilings = map[string]int{
 	"internal/adapter/repo/user.go":                    1206,
 	"internal/app/convert.go":                          1304,
 	"internal/app/quota.go":                            1253, // -136 (cycle 18 L2): PostConsumeQuota's Phase 5 (the platform wallet leg: settle/park, release, legacy debit, zero-usage release) moved as-is to quota_settle.go; earlier: +3 record the wallet charge on both settlement branches (migration 041); -1 (legacy debit failure arm moved to billing_debit_outbox.go); +1 currency import (wallet debit in CNY, 2026-09-23); +10 (cycle-13 hand-finish + the 402 ASCII fix)
-	"internal/pkg/common/identity_client.go":           785,  // -25 (cycle 14): the usage-report counter + ReportLLMUsage moved to identity_usage_report.go, paying for the checkout/status error honesty; -23 (R57): LookupAccountByIDPSubject + sentinels moved to identity_lookup.go
+	"internal/pkg/common/identity_client.go":           740,  // -76 (wallet-ledger PR): Entitlements + its lenient UnmarshalJSON moved to identity_entitlements.go; -25 (cycle 14): the usage-report counter + ReportLLMUsage moved to identity_usage_report.go, paying for the checkout/status error honesty; -23 (R57): LookupAccountByIDPSubject + sentinels moved to identity_lookup.go
 	"internal/pkg/dto/openai_request.go":               1020,
 	// NEW ROW, not a raise: metrics.go crossed the 800 threshold in cycle 13
 	// when the observability lane added the counters the fourteen new netdata

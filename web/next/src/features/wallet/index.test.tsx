@@ -64,7 +64,7 @@ const platformWallet = {
   lifetime_topup: 500,
   lifetime_spend: 376.55,
   pending_orders: 0,
-  topup_url: 'https://id.example.com/wallet/topup',
+  topup_url: 'https://id.example.com/topup',
 }
 
 function renderPage() {
@@ -141,7 +141,7 @@ describe('balances', () => {
     ).toBeInTheDocument()
     expect(
       screen.getByRole('link', { name: /Open platform wallet/ })
-    ).toHaveAttribute('href', 'https://id.example.com/wallet/topup')
+    ).toHaveAttribute('href', 'https://id.example.com/topup')
   })
 
   it('reports an unavailable wallet instead of a made-up balance', async () => {

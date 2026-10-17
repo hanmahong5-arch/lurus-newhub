@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -25,10 +26,6 @@ func getIdentityServiceURL() string {
 // IdentityServiceInternalKey is the bearer token for /internal/v1/* endpoints.
 var IdentityServiceInternalKey = os.Getenv("IDENTITY_SERVICE_INTERNAL_KEY")
 
-// IdentityAuthRedirect controls whether register/login/topup endpoints redirect to identity service.
-// Set IDENTITY_AUTH_REDIRECT=true to enable.
-var IdentityAuthRedirect = os.Getenv("IDENTITY_AUTH_REDIRECT") == "true"
-
 // RefreshIdentityClientEnv re-reads the identity/session/billing env vars whose
 // package-level initializers run at program init — BEFORE main() calls
 // godotenv.Load(".env"). Without this refresh, any of these vars set only in a
@@ -36,7 +33,6 @@ var IdentityAuthRedirect = os.Getenv("IDENTITY_AUTH_REDIRECT") == "true"
 // (K8s) is honoured either way. Call once, right after godotenv.Load succeeds.
 func RefreshIdentityClientEnv() {
 	IdentityServiceInternalKey = os.Getenv("IDENTITY_SERVICE_INTERNAL_KEY")
-	IdentityAuthRedirect = os.Getenv("IDENTITY_AUTH_REDIRECT") == "true"
 	IdentitySessionSecret = os.Getenv("IDENTITY_SESSION_SECRET")
 	SetBillingUnifiedEnabled(os.Getenv("BILLING_UNIFIED_ENABLED") == "true")
 	SetLocalLedgerAdvisory(os.Getenv("LOCAL_LEDGER_ADVISORY") == "true")
@@ -44,6 +40,14 @@ func RefreshIdentityClientEnv() {
 
 // IdentityPublicURL is the external-facing URL for lurus-platform (used in redirect responses).
 var IdentityPublicURL = getIdentityPublicURL()
+
+// IdentityTopupPath is the platform's wallet top-up page (its SPA route
+// "/topup"; "/wallet/topup" is not a route there and answers 404).
+const IdentityTopupPath = "/topup"
+
+// IdentityTopupURL is the one top-up link every newhub surface hands out:
+// API 402 metadata, the wallet endpoint, and money-in refusals.
+func IdentityTopupURL() string { return IdentityPublicURL + IdentityTopupPath }
 
 func getIdentityPublicURL() string {
 	if url := os.Getenv("IDENTITY_PUBLIC_URL"); url != "" {
@@ -95,43 +99,6 @@ func (m *IdentityMapping) UnmarshalJSON(data []byte) error {
 		}
 	}
 	return nil
-}
-
-// Entitlements is a key→value map describing an account's product permissions.
-type Entitlements map[string]string
-
-// GetString returns a string entitlement value, falling back to defaultVal.
-func (e Entitlements) GetString(key, defaultVal string) string {
-	if v, ok := e[key]; ok {
-		return v
-	}
-	return defaultVal
-}
-
-// GetInt returns an integer entitlement value, falling back to defaultVal.
-func (e Entitlements) GetInt(key string, defaultVal int) int {
-	v := e.GetString(key, "")
-	if v == "" {
-		return defaultVal
-	}
-	var i int
-	if _, err := fmt.Sscanf(v, "%d", &i); err != nil {
-		return defaultVal
-	}
-	return i
-}
-
-// GetBool returns a boolean entitlement value, falling back to defaultVal.
-func (e Entitlements) GetBool(key string, defaultVal bool) bool {
-	v := e.GetString(key, "")
-	switch v {
-	case "true":
-		return true
-	case "false":
-		return false
-	default:
-		return defaultVal
-	}
 }
 
 // GetAccountByZitadelSub retrieves account info from lurus-platform by OIDC sub.
@@ -330,7 +297,7 @@ func GetAccountByEmail(ctx context.Context, email string) (*IdentityMapping, err
 	}
 	req, err := http.NewRequestWithContext(ctx,
 		http.MethodGet,
-		IdentityServiceURL+"/internal/v1/accounts/by-email/"+email,
+		IdentityServiceURL+"/internal/v1/accounts/by-email/"+url.PathEscape(email),
 		nil,
 	)
 	if err != nil {
@@ -359,13 +326,21 @@ func GetAccountByEmail(ctx context.Context, email string) (*IdentityMapping, err
 }
 
 // GetAccountByZitadelSub_ByAccountID retrieves account info from lurus-platform by account ID.
-// Used to resolve identity session tokens to zitadel_sub for user mapping lookup.
+// Used to resolve identity session tokens to the IdP subject for user mapping lookup.
+//
+// It calls GET /internal/v1/accounts/by-id/:id (scope account:read), which
+// returns the full platform entity.Account — including idp_subject (emitted by
+// Account.MarshalJSON) alongside the deprecated zitadel_sub, plus email and
+// status. It must NOT use /accounts/:id/overview: that endpoint's
+// AccountSummary only carries id / lurus_id / display_name / avatar_url, so the
+// subject was always empty and the platform session-token branch of
+// middleware auth never resolved a user.
 func GetAccountByZitadelSub_ByAccountID(ctx context.Context, accountID int64) (*IdentityMapping, error) {
 	if IdentityServiceURL == "" {
 		return nil, nil
 	}
-	url := fmt.Sprintf("%s/internal/v1/accounts/%d/overview", IdentityServiceURL, accountID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	endpoint := fmt.Sprintf("%s/internal/v1/accounts/by-id/%d", IdentityServiceURL, accountID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, nil
 	}
@@ -379,39 +354,18 @@ func GetAccountByZitadelSub_ByAccountID(ctx context.Context, accountID int64) (*
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode != http.StatusNotFound {
+			SysLog(fmt.Sprintf("identity GetAccountByAccountID: status %d", resp.StatusCode))
+		}
 		return nil, nil
 	}
-	// The overview endpoint returns a nested structure; extract the account part.
-	// Accept both idp_subject (canonical) and zitadel_sub (deprecated) for the
-	// subject during the platform migration window.
-	var ov struct {
-		Account struct {
-			ID          int64  `json:"id"`
-			LurusID     string `json:"lurus_id"`
-			IDPSubject  string `json:"idp_subject"`
-			ZitadelSub  string `json:"zitadel_sub"`
-			Email       string `json:"email"`
-			DisplayName string `json:"display_name"`
-			AvatarURL   string `json:"avatar_url"`
-			Status      int16  `json:"status"`
-		} `json:"account"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&ov); err != nil {
+	// IdentityMapping.UnmarshalJSON accepts idp_subject (canonical) and falls
+	// back to zitadel_sub (deprecated) during the platform migration window.
+	var a IdentityMapping
+	if err := json.NewDecoder(resp.Body).Decode(&a); err != nil {
 		return nil, nil
 	}
-	subject := ov.Account.IDPSubject
-	if subject == "" {
-		subject = ov.Account.ZitadelSub
-	}
-	return &IdentityMapping{
-		ID:          ov.Account.ID,
-		LurusID:     ov.Account.LurusID,
-		ZitadelSub:  subject,
-		Email:       ov.Account.Email,
-		DisplayName: ov.Account.DisplayName,
-		AvatarURL:   ov.Account.AvatarURL,
-		Status:      ov.Account.Status,
-	}, nil
+	return &a, nil
 }
 
 // DebitWalletResult holds the response from a wallet debit call.
@@ -452,14 +406,12 @@ func DebitWallet(ctx context.Context, accountID int64, amount float64, txType, d
 	defer resp.Body.Close()
 
 	if mayCarryInsufficientBalance(resp.StatusCode) {
-		var errResp struct {
-			Error string `json:"error"`
-		}
-		// Same sentinel PreAuthorize returns, so a caller that classifies with
+		// Same sentinel PreAuthorize returns (enriched with the platform's
+		// top-up link when present), so a caller that classifies with
 		// errors.Is gets the same answer whichever wallet call produced it.
 		// The body code decides, whether the platform sent it as 400, 402 or 409.
-		if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil && errResp.Error == insufficientBalanceCode {
-			return nil, ErrInsufficientBalance
+		if eb := parsePlatformErrorBody(resp.Body); eb.Error == insufficientBalanceCode {
+			return nil, eb.insufficientBalanceErr()
 		}
 		return nil, fmt.Errorf("debit failed: status %d", resp.StatusCode)
 	}
@@ -758,7 +710,10 @@ func ListWalletTransactionsHTTP(ctx context.Context, accountID int64, page, page
 	if pageSize <= 0 || pageSize > 200 {
 		pageSize = 20
 	}
-	url := fmt.Sprintf("%s/internal/v1/accounts/%d/wallet/transactions?p=%d&page_size=%d",
+	// platform's parsePagination reads `page` / `page_size` (NOT this repo's
+	// own `p=` convention — sending `p` silently pinned every request to page 1)
+	// and clamps page_size to 100.
+	url := fmt.Sprintf("%s/internal/v1/accounts/%d/wallet/transactions?page=%d&page_size=%d",
 		IdentityServiceURL, accountID, page, pageSize)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {

@@ -19,7 +19,9 @@ func TestListWalletTransactionsHTTP_Success(t *testing.T) {
 		if !strings.Contains(r.URL.Path, "/internal/v1/accounts/42/wallet/transactions") {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
-		if r.URL.Query().Get("p") != "2" || r.URL.Query().Get("page_size") != "10" {
+		// platform parsePagination reads `page` (not `p`); a `p` key would be
+		// ignored and every request would silently return page 1.
+		if r.URL.Query().Get("page") != "2" || r.URL.Query().Get("page_size") != "10" || r.URL.Query().Has("p") {
 			t.Errorf("unexpected pagination query: %s", r.URL.RawQuery)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -96,7 +98,7 @@ func TestListWalletTransactionsHTTP_ServerError(t *testing.T) {
 func TestListWalletTransactionsHTTP_DefaultPagination(t *testing.T) {
 	var gotP, gotSize string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotP = r.URL.Query().Get("p")
+		gotP = r.URL.Query().Get("page")
 		gotSize = r.URL.Query().Get("page_size")
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{}, "total": 0})
 	}))
