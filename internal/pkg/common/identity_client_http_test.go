@@ -218,15 +218,86 @@ func TestGetAccountByEmail_HTTP(t *testing.T) {
 	}
 }
 
+// TestGetAccountByEmail_PathEscaped pins that reserved path characters in the
+// email are escaped into ONE path segment instead of altering the route
+// ("/" adding a segment, "?" / "#" truncating it into a query / fragment).
+func TestGetAccountByEmail_PathEscaped(t *testing.T) {
+	const email = "a/b?c#d@x.com"
+	newIdentityServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawQuery != "" {
+			t.Errorf("email leaked into query: %q", r.URL.RawQuery)
+		}
+		if got, want := r.URL.EscapedPath(), "/internal/v1/accounts/by-email/a%2Fb%3Fc%23d@x.com"; got != want {
+			t.Errorf("escaped path = %q, want %q", got, want)
+		}
+		if got := r.URL.Path; got != "/internal/v1/accounts/by-email/"+email {
+			t.Errorf("decoded path = %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 12, "email": email})
+	})
+	m, err := GetAccountByEmail(context.Background(), email)
+	if err != nil || m == nil || m.ID != 12 {
+		t.Fatalf("unexpected: %+v err=%v", m, err)
+	}
+}
+
+// platformAccountByIDBody mirrors what platform GET /internal/v1/accounts/by-id/:id
+// actually returns: the full entity.Account, whose MarshalJSON adds the
+// canonical idp_subject next to the deprecated zitadel_sub.
+func platformAccountByIDBody(id int64, idpSubject, legacySub string) map[string]any {
+	body := map[string]any{
+		"id": id, "lurus_id": "LU0000021", "display_name": "Zed",
+		"avatar_url": "https://a/x.png", "email": "z@x.com", "email_verified": true,
+		"status": 1, "is_platform_admin": false, "aff_code": "aff",
+	}
+	if legacySub != "" {
+		body["zitadel_sub"] = legacySub
+	}
+	if idpSubject != "" {
+		body["idp_subject"] = idpSubject
+	}
+	return body
+}
+
 func TestGetAccountByAccountID_HTTP(t *testing.T) {
 	newIdentityServer(t, func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"account": map[string]any{"id": 21, "zitadel_sub": "legacy-sub", "email": "z@x.com"},
-		})
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		// Must be the by-id route: /accounts/:id/overview's AccountSummary has
+		// no subject/email/status, which left the session-token auth inert.
+		if r.URL.Path != "/internal/v1/accounts/by-id/21" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(platformAccountByIDBody(21, "idp-sub", "idp-sub"))
 	})
 	m, err := GetAccountByZitadelSub_ByAccountID(context.Background(), 21)
-	if err != nil || m == nil || m.ID != 21 || m.ZitadelSub != "legacy-sub" {
+	if err != nil || m == nil {
 		t.Fatalf("unexpected: %+v err=%v", m, err)
+	}
+	if m.ID != 21 || m.ZitadelSub != "idp-sub" || m.Email != "z@x.com" || m.Status != 1 ||
+		m.LurusID != "LU0000021" || m.DisplayName != "Zed" {
+		t.Fatalf("fields not mapped: %+v", m)
+	}
+}
+
+func TestGetAccountByAccountID_LegacySubjectOnly(t *testing.T) {
+	newIdentityServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(platformAccountByIDBody(21, "", "legacy-sub"))
+	})
+	m, err := GetAccountByZitadelSub_ByAccountID(context.Background(), 21)
+	if err != nil || m == nil || m.ZitadelSub != "legacy-sub" {
+		t.Fatalf("unexpected: %+v err=%v", m, err)
+	}
+}
+
+func TestGetAccountByAccountID_NotFound(t *testing.T) {
+	newIdentityServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	m, err := GetAccountByZitadelSub_ByAccountID(context.Background(), 404)
+	if err != nil || m != nil {
+		t.Fatalf("404 should degrade to (nil,nil), got (%+v,%v)", m, err)
 	}
 }
 

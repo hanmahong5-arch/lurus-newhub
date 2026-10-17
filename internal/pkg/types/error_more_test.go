@@ -182,7 +182,7 @@ func TestErrOptions_Compose(t *testing.T) {
 	if err := json.Unmarshal(e.Metadata, &meta); err != nil {
 		t.Fatalf("Metadata not valid JSON: %v", err)
 	}
-	want := common.IdentityPublicURL + "/wallet/topup"
+	want := common.IdentityPublicURL + "/topup"
 	if meta["topup_url"] != want {
 		t.Errorf("topup_url = %q, want %q", meta["topup_url"], want)
 	}

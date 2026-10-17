@@ -232,6 +232,7 @@ func GenerateFinalUsageResponse(id string, createAt int64, model string, usage d
 	u := usage
 	if len(ext) > 0 && ext[0] != nil {
 		u.XLurus = ext[0]
+		u.Cost = ext[0].ChargedUSD
 	}
 	return &dto.ChatCompletionsStreamResponse{
 		Id:                id,

@@ -363,7 +363,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 }
 
 func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage) {
-
+	RecordUpstreamCost(relayInfo, usage)
 	useTimeSeconds := time.Now().Unix() - relayInfo.StartTime.Unix()
 	promptTokens := usage.PromptTokens
 	completionTokens := usage.CompletionTokens
@@ -1071,6 +1071,7 @@ func mirrorUsageEvent(ctx context.Context, relayInfo *relaycommon.RelayInfo, acc
 	if preAuthID > 0 {
 		meta["preauth_id"] = preAuthID
 	}
+	addMirrorCostMeta(meta, relayInfo)
 	if rptErr := common.ReportUsageEvent(ctx, accountID, sourceProductOf(relayInfo), "llm_relay",
 		int64(totalQuota), idemKey, meta); rptErr != nil {
 		metrics.BillingUsageMirrorTotal.WithLabelValues("error").Inc()

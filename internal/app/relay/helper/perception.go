@@ -141,7 +141,53 @@ func ComputeLurusExtension(info *relaycommon.RelayInfo, usage *dto.Usage, totalQ
 		CachedTokens:     cachedTokens,
 		BalanceRemaining: balanceRemaining,
 		BillingMode:      billingMode,
+		ChargedUSD:       quotaToUSD(totalQuota),
 	}
+}
+
+func quotaToUSD(quota int) float64 {
+	if common.QuotaPerUnit <= 0 {
+		return 0
+	}
+	usd, _ := decimal.NewFromInt(int64(quota)).
+		Div(decimal.NewFromFloat(common.QuotaPerUnit)).
+		Round(10).Float64()
+	return usd
+}
+
+// ApplyChargedCost rewrites the OpenRouter-standard cost fields of an
+// OpenAI-wire usage object so they state what the caller is charged.
+//
+// An OpenRouter channel's reply carries OpenRouter's own usage.cost (what we
+// pay it, in USD) plus cost_details and is_byok. Passed through unchanged,
+// tools that read usage.cost (Cline, Roo, OpenClaw and others built for
+// OpenRouter) showed the caller our purchase price instead of their charge,
+// and every other channel showed no cost at all. The caller's charge is the
+// quota the wallet debit is computed from, in USD credits like the prices on
+// /api/v1/models. With ext nil (the request is not billed, e.g. an aborted
+// stream) the upstream cost is removed and none is stated. It reports
+// whether it changed anything, so a caller can pass an untouched frame on
+// byte for byte.
+func ApplyChargedCost(usage map[string]interface{}, ext *types.LurusUsageExtension) bool {
+	if usage == nil {
+		return false
+	}
+	changed := false
+	for _, k := range []string{"cost_details", "is_byok"} {
+		if _, ok := usage[k]; ok {
+			delete(usage, k)
+			changed = true
+		}
+	}
+	if ext == nil {
+		if _, ok := usage["cost"]; ok {
+			delete(usage, "cost")
+			changed = true
+		}
+		return changed
+	}
+	usage["cost"] = ext.ChargedUSD
+	return true
 }
 
 // Response header names this package emits, and the two values

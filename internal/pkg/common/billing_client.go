@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sync/atomic"
 )
@@ -23,6 +24,35 @@ import (
 // with balance, which made the graceful-degradation path refuse to degrade on
 // exactly the failures it exists for.
 var ErrInsufficientBalance = errors.New("insufficient_balance")
+
+// InsufficientBalanceError is ErrInsufficientBalance carrying the platform's
+// own top-up link. lurus-platform (PR #106) puts the absolute wallet top-up URL
+// in the insufficient_balance body as `actions[0].url` on wallet debit /
+// pre-authorize, so a relaying service or AI agent can hand the human one URL
+// to pay and then retry. It unwraps to ErrInsufficientBalance, so every
+// errors.Is classification (degrade guard, breaker, preAuthFailure) is
+// unchanged; only callers that ask PlatformTopupURL see the link.
+//
+// Returned ONLY when the platform sent a usable absolute link; otherwise the
+// bare sentinel is returned exactly as before.
+type InsufficientBalanceError struct {
+	TopupURL string // platform-supplied absolute http(s) URL, passed through verbatim
+}
+
+func (e *InsufficientBalanceError) Error() string { return ErrInsufficientBalance.Error() }
+
+// Unwrap makes errors.Is(err, ErrInsufficientBalance) hold.
+func (e *InsufficientBalanceError) Unwrap() error { return ErrInsufficientBalance }
+
+// PlatformTopupURL returns the platform-supplied top-up link carried by err
+// (see InsufficientBalanceError), or "" when the platform sent none.
+func PlatformTopupURL(err error) string {
+	var ib *InsufficientBalanceError
+	if errors.As(err, &ib) {
+		return ib.TopupURL
+	}
+	return ""
+}
 
 // PlatformRejectedError is a platform rejection that is NOT about the
 // customer's balance — a validation rule the platform tightened, a missing
@@ -144,9 +174,10 @@ func PreAuthorize(ctx context.Context, accountID int64, amount float64, productI
 		// The body's error code, not the status, decides "out of money": the
 		// platform has answered insufficient_balance with 400, 402 and 409 at
 		// different times and is converging on 402.
-		reason := parseErrorResponse(resp.Body)
+		eb := parsePlatformErrorBody(resp.Body)
+		reason := eb.reason()
 		if reason == insufficientBalanceCode {
-			return nil, ErrInsufficientBalance
+			return nil, eb.insufficientBalanceErr()
 		}
 		if resp.StatusCode != http.StatusBadRequest {
 			// 402/409 without the balance code: unchanged from before this
@@ -287,6 +318,64 @@ const insufficientBalanceCode = "insufficient_balance"
 // of these statuses maps to ErrInsufficientBalance.
 func mayCarryInsufficientBalance(status int) bool {
 	return status == http.StatusBadRequest || status == http.StatusPaymentRequired || status == http.StatusConflict
+}
+
+// platformErrorAction mirrors one entry of the platform ErrorBody `actions`
+// array (respond_rich.go ErrorAction: type / label / url).
+type platformErrorAction struct {
+	Type  string `json:"type"`
+	Label string `json:"label"`
+	URL   string `json:"url"`
+}
+
+// platformErrorBody is the platform's error envelope: {error, message, actions}.
+type platformErrorBody struct {
+	Error   string                `json:"error"`
+	Actions []platformErrorAction `json:"actions"`
+}
+
+// parsePlatformErrorBody decodes the platform error envelope. Unparseable
+// bodies yield the zero value (reason() == "unknown"). Consumes the reader.
+func parsePlatformErrorBody(body io.Reader) platformErrorBody {
+	var eb platformErrorBody
+	if err := json.NewDecoder(body).Decode(&eb); err != nil {
+		return platformErrorBody{}
+	}
+	return eb
+}
+
+func (eb platformErrorBody) reason() string {
+	if eb.Error == "" {
+		return "unknown"
+	}
+	return eb.Error
+}
+
+// topupURL returns the first "link" action's URL when it is an absolute
+// http(s) URL, verbatim; "" otherwise. A relative path (what the platform
+// sent before #106 on some routes) has no base a downstream agent could
+// resolve it against, so it is dropped rather than forwarded.
+func (eb platformErrorBody) topupURL() string {
+	for _, a := range eb.Actions {
+		if a.Type != "link" || a.URL == "" {
+			continue
+		}
+		u, err := url.Parse(a.URL)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			continue
+		}
+		return a.URL
+	}
+	return ""
+}
+
+// insufficientBalanceErr is the sentinel, enriched with the platform's top-up
+// link when it sent one.
+func (eb platformErrorBody) insufficientBalanceErr() error {
+	if link := eb.topupURL(); link != "" {
+		return &InsufficientBalanceError{TopupURL: link}
+	}
+	return ErrInsufficientBalance
 }
 
 // parseErrorResponse extracts the "error" field from a JSON error response body.

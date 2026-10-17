@@ -428,6 +428,19 @@ func InternalTopupBalance(c *gin.Context) {
 		return
 	}
 
+	// A platform-linked user whose balance is the platform wallet gains
+	// nothing from users.quota; refuse rather than book money into a ledger
+	// that no longer gates spend (see repo.WalletIsLedger).
+	if user.LurusAccountID != nil && *user.LurusAccountID > 0 && repo.WalletIsLedger(user.TenantId) {
+		c.JSON(http.StatusConflict, gin.H{
+			"success":    false,
+			"message":    "user balance is the platform wallet; credit the wallet instead",
+			"error_code": repo.RedemptionErrorCodeWalletLedger,
+			"topup_url":  common.IdentityTopupURL(),
+		})
+		return
+	}
+
 	// Convert RMB to tokens
 	quotaAmount := currency.CNYToQuota(req.AmountRmb)
 

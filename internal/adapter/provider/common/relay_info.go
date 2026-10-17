@@ -129,7 +129,8 @@ type RelayInfo struct {
 	// here for the same reason as ProjectId. A label, never an authorization
 	// input.
 	EmployeeRef      string
-	WalletChargeCNY4 int64 // wallet charge PostConsumeQuota committed to, 0.0001 CNY (-> entity.Log.ChargedCNY4)
+	WalletChargeCNY4 int64    // wallet charge PostConsumeQuota committed to, 0.0001 CNY (-> entity.Log.ChargedCNY4)
+	UpstreamCostUSD  *float64 // what the upstream billed (OpenRouter usage.cost); nil = not reported, never 0
 	// SessionId is the caller-supplied X-Session-Id header, validated
 	// (printable ASCII, <=200 bytes) but never hashed: unlike EndUserHash it
 	// carries no persistent user identity, only a conversation-scoped
