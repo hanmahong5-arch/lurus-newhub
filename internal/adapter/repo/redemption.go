@@ -230,8 +230,11 @@ var (
 	// balance is the platform wallet (WalletIsLedger). Crediting users.quota
 	// there buys nothing: the wallet is the only gate, so the code would be
 	// burned for a shadow number. The code stays unused; the user tops up the
-	// wallet instead. Text avoids the Switch classifier substrings on purpose.
-	ErrRedemptionWalletLedger = errors.New("该账户余额由 Lurus 钱包统一管理，请到钱包充值")
+	// wallet instead. English per the wire-message contract
+	// (wire_message_language_gate_test.go): clients localize from the
+	// WALLET_IS_LEDGER code and send the user to the topup_url beside it.
+	// The text also avoids the Switch classifier substrings on purpose.
+	ErrRedemptionWalletLedger = errors.New("this account's balance is the Lurus wallet; top up the wallet instead")
 )
 
 // knownRedemptionErrors is the set of sentinels Redeem() returns today
