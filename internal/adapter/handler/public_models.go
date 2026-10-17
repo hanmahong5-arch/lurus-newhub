@@ -222,7 +222,7 @@ func usdString(v float64) string {
 // without its integer truncation), so the published yuan price is the
 // charged one. Rounded to 6 decimals for display.
 func usdToCNY(usd float64) float64 {
-	return math.Round(usd*common.QuotaPerUnit/currency.LucToLut()*1e6) / 1e6
+	return math.Round(currency.USDToCNY(usd)*1e6) / 1e6
 }
 
 func usdToCNYPerMTok(usdPerToken float64) float64 {

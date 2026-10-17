@@ -30,8 +30,8 @@ func TestRecordUpstreamCost_OnlyWhenUpstreamReportsIt(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: tc.chType}}
 			RecordUpstreamCost(info, &dto.Usage{Cost: tc.cost})
-			if info.UpstreamCostKnown != tc.wantKnown {
-				t.Fatalf("UpstreamCostKnown = %v, want %v", info.UpstreamCostKnown, tc.wantKnown)
+			if known := info.UpstreamCostUSD != nil; known != tc.wantKnown {
+				t.Fatalf("upstream cost known = %v, want %v", known, tc.wantKnown)
 			}
 		})
 	}
