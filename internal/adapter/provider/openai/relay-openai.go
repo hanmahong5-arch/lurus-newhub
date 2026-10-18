@@ -394,10 +394,10 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		}
 		if forceFormat {
 			out := simpleResponse
-			out.Usage.XLurus = lurusExt
-			out.Usage.Cost = nil
+			out.XLurus = lurusExt
+			out.Cost = nil
 			if lurusExt != nil {
-				out.Usage.Cost = lurusExt.ChargedUSD
+				out.Cost = lurusExt.ChargedUSD
 			}
 			responseBody, err = common.Marshal(out)
 			if err != nil {

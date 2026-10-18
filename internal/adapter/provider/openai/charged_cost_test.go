@@ -19,7 +19,7 @@ func chargedUSDFor10Quota() float64 { return 10 / common.QuotaPerUnit }
 
 func openRouterInfo() *relaycommon.RelayInfo {
 	info := perceptiveRelayInfo()
-	info.ChannelMeta.ChannelType = constant.ChannelTypeOpenRouter
+	info.ChannelType = constant.ChannelTypeOpenRouter
 	return info
 }
 
