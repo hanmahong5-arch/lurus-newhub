@@ -17,6 +17,7 @@ import {
 } from './lib/checkout'
 import { formatCny, formatSignedCny } from './lib/format'
 import * as navigate from './lib/navigate'
+import { withReturnTo } from './lib/return-to'
 
 const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }))
 vi.mock('sonner', () => ({ toast }))
@@ -36,7 +37,12 @@ vi.mock('@/lib/user', async (importOriginal) => ({
   currentUserQueryOptions: {
     queryKey: ['current-user'],
     queryFn: () =>
-      Promise.resolve({ role: 1, remaining_quota: 3_000_000, used_quota: 1_000_000, request_count: 12 }),
+      Promise.resolve({
+        role: 1,
+        remaining_quota: 3_000_000,
+        used_quota: 1_000_000,
+        request_count: 12,
+      }),
   },
 }))
 vi.mock('../org-billing/api', () => ({ redeemCode: vi.fn() }))
@@ -129,6 +135,31 @@ beforeEach(() => {
   })
 })
 
+describe('withReturnTo', () => {
+  it("adds return_to and keeps the platform's own query", () => {
+    const out = new URL(
+      withReturnTo(
+        'https://id.example.com/topup?amount=50',
+        'https://hub.example.com/wallet'
+      )
+    )
+    expect(out.searchParams.get('amount')).toBe('50')
+    expect(out.searchParams.get('return_to')).toBe(
+      'https://hub.example.com/wallet'
+    )
+  })
+
+  it('keeps a return_to the platform already set', () => {
+    const out = new URL(
+      withReturnTo(
+        'https://id.example.com/topup?return_to=x',
+        'https://hub.example.com/wallet'
+      )
+    )
+    expect(out.searchParams.get('return_to')).toBe('x')
+  })
+})
+
 describe('balances', () => {
   it('shows the wallet in CNY and the usage from the money config', async () => {
     renderPage()
@@ -139,9 +170,12 @@ describe('balances', () => {
     expect(
       within(screen.getByTestId('stat-usage')).getByText('$2.00')
     ).toBeInTheDocument()
-    expect(
-      screen.getByRole('link', { name: /Open platform wallet/ })
-    ).toHaveAttribute('href', 'https://id.example.com/topup')
+    const href = screen
+      .getByRole('link', { name: /Open platform wallet/ })
+      .getAttribute('href')
+    const link = new URL(href ?? '')
+    expect(link.origin + link.pathname).toBe('https://id.example.com/topup')
+    expect(link.searchParams.get('return_to')).toBe(window.location.href)
   })
 
   it('reports an unavailable wallet instead of a made-up balance', async () => {

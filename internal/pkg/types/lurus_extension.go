@@ -9,4 +9,9 @@ type LurusUsageExtension struct {
 	CachedTokens     int     `json:"cached_tokens,omitempty"`
 	BalanceRemaining float64 `json:"balance_remaining"`
 	BillingMode      string  `json:"billing_mode"`
+
+	// ChargedUSD is the same charge as CostLB in USD credits (quota /
+	// QuotaPerUnit), the unit /api/v1/models prices in. It is written to the
+	// OpenRouter-standard usage.cost field, not to x_lurus.
+	ChargedUSD float64 `json:"-"`
 }

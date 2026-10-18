@@ -103,18 +103,19 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 	return helper.ObjectData(c, lastStreamResponse)
 }
 
-// sendFinalStreamData sends the last raw SSE chunk of a stream, attaching
-// lurusExt onto the chunk's own "usage" object when the upstream inlined
-// usage in that chunk (containStreamUsage==true upstream). This is the only
-// place x_lurus reaches the client for that case: HandleFinalResponse's
-// synthetic-usage-frame branch is skipped whenever the chunk already carries
-// usage, so without this the perception extension is computed and discarded.
+// sendFinalStreamData sends the last raw SSE chunk of a stream. When the
+// upstream inlined usage in that chunk (containStreamUsage==true upstream),
+// this is the only place the response's usage reaches the client:
+// HandleFinalResponse's synthetic-usage-frame branch is skipped whenever the
+// chunk already carries usage. So the chunk's usage gets the charged cost
+// (helper.ApplyChargedCost, which also drops an OpenRouter upstream's own
+// cost) and, outside forceFormat/thinkToContent, the x_lurus extension.
 //
-// lurusExt==nil, forceFormat, thinkToContent, or any parse failure falls back
-// to the untouched raw passthrough (sendStreamData) — never invents or drops
-// a frame.
+// A chunk without a usage object, one that does not parse, or one with
+// nothing to change goes out untouched through sendStreamData — never
+// invents or drops a frame.
 func sendFinalStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, forceFormat bool, thinkToContent bool, lurusExt *types.LurusUsageExtension) error {
-	if lurusExt == nil || forceFormat || thinkToContent || data == "" {
+	if data == "" {
 		return sendStreamData(c, info, data, forceFormat, thinkToContent)
 	}
 
@@ -127,14 +128,19 @@ func sendFinalStreamData(c *gin.Context, info *relaycommon.RelayInfo, data strin
 	if !ok {
 		return sendStreamData(c, info, data, forceFormat, thinkToContent)
 	}
-	usageMap["x_lurus"] = lurusExt
+	if !helper.ApplyChargedCost(usageMap, lurusExt) {
+		return sendStreamData(c, info, data, forceFormat, thinkToContent)
+	}
+	if lurusExt != nil && !forceFormat && !thinkToContent {
+		usageMap["x_lurus"] = lurusExt
+	}
 
 	merged, err := common.Marshal(bodyMap)
 	if err != nil {
 		return sendStreamData(c, info, data, forceFormat, thinkToContent)
 	}
 
-	return helper.StringData(c, string(merged))
+	return sendStreamData(c, info, string(merged), forceFormat, thinkToContent)
 }
 
 func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -370,18 +376,30 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		if usageModified {
 			bodyMap["usage"] = simpleResponse.Usage
 		}
-		if lurusExt != nil {
-			if usageMap, ok := bodyMap["usage"].(map[string]interface{}); ok {
+		// The usage written to the client states the charged cost
+		// (helper.ApplyChargedCost). The struct paths edit a copy:
+		// simpleResponse.Usage is returned for billing, where an OpenRouter
+		// channel's own usage.cost is still read as the upstream cost.
+		if usageMap, ok := bodyMap["usage"].(map[string]interface{}); ok {
+			helper.ApplyChargedCost(usageMap, lurusExt)
+			if lurusExt != nil {
 				usageMap["x_lurus"] = lurusExt
-			} else {
-				// usage field is a struct (from usageModified), re-read after marshal
-				simpleResponse.Usage.XLurus = lurusExt
-				bodyMap["usage"] = simpleResponse.Usage
 			}
+		} else if lurusExt != nil {
+			// usage field is a struct (from usageModified)
+			out := simpleResponse.Usage
+			out.XLurus = lurusExt
+			out.Cost = lurusExt.ChargedUSD
+			bodyMap["usage"] = out
 		}
 		if forceFormat {
-			simpleResponse.Usage.XLurus = lurusExt
-			responseBody, err = common.Marshal(simpleResponse)
+			out := simpleResponse
+			out.XLurus = lurusExt
+			out.Cost = nil
+			if lurusExt != nil {
+				out.Cost = lurusExt.ChargedUSD
+			}
+			responseBody, err = common.Marshal(out)
 			if err != nil {
 				return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 			}

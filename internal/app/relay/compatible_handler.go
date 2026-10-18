@@ -206,6 +206,9 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 		}
 		extraContent = append(extraContent, "上游无计费信息")
 	}
+	if !usageWasNil {
+		app.RecordUpstreamCost(relayInfo, usage)
+	}
 	useTimeSeconds := time.Now().Unix() - relayInfo.StartTime.Unix()
 	promptTokens := usage.PromptTokens
 	// Rerank vendors (Jina) report only total_tokens. The handler keeps the

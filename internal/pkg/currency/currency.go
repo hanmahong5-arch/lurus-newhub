@@ -63,6 +63,13 @@ func QuotaToCNY(quota int) float64 {
 	return float64(quota) / LucToLut()
 }
 
+// USDToCNY converts a USD amount (a price, or a cost an upstream reported)
+// to yuan at the rate the wallet debit uses: USD → quota → yuan, without
+// QuotaToCNY's integer quota truncation.
+func USDToCNY(usd float64) float64 {
+	return usd * common.QuotaPerUnit / LucToLut()
+}
+
 // CNYUnits4PerYuan is how many recorded units make one yuan: the platform
 // wallet stores amounts as numeric(14,4), so 0.0001 CNY is the smallest
 // amount that can ever move.
