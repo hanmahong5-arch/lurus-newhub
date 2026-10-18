@@ -334,10 +334,13 @@ func preAuthFailure(err error) *types.NewAPIError {
 	var rejected *common.PlatformRejectedError
 	switch {
 	case errors.Is(err, common.ErrInsufficientBalance):
+		// error.metadata.topup_url is the one URL the API caller — often an
+		// agent — hands the human to pay and then retry; the platform's own
+		// link wins when it sent one.
 		return types.NewErrorWithStatusCode(errors.New("insufficient wallet balance"),
 			types.ErrorCodeInsufficientUserQuota, http.StatusPaymentRequired,
 			types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(),
-			types.ErrOptionWithTopupURL())
+			types.ErrOptionWithPlatformTopupURL(common.PlatformTopupURL(err)))
 	case errors.As(err, &rejected):
 		return types.NewErrorWithStatusCode(
 			fmt.Errorf("billing service rejected this request: %s", rejected.Reason),

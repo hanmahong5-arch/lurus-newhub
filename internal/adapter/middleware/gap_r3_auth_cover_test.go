@@ -134,7 +134,7 @@ func TestAuthHelper_AccessToken_InvalidRole_Rejected(t *testing.T) {
 }
 
 // authHelper: a valid lurus-platform identity session token (HS256) resolves via
-// the platform overview + local IDP-subject mapping to a local user — the SDK
+// the platform by-id account lookup + local IDP-subject mapping to a local user — the SDK
 // bridge auth-parity path (:91). No cross-tenant bleed: the mapped user's own
 // identity is admitted.
 func TestAuthHelper_IdentitySessionToken_ResolvesUser(t *testing.T) {
@@ -148,10 +148,18 @@ func TestAuthHelper_IdentitySessionToken_ResolvesUser(t *testing.T) {
 	common.IdentitySessionSecret = "session-secret-gap-r3"
 	defer func() { common.IdentitySessionSecret = prevSecret }()
 
-	// Platform overview endpoint returns the account's IDP subject.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	// Platform by-id endpoint returns the account's IDP subject.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// platform GET /internal/v1/accounts/by-id/:id returns the flat
+		// entity.Account (idp_subject via Account.MarshalJSON). The overview
+		// endpoint's AccountSummary has no subject at all.
+		if want := fmt.Sprintf("/internal/v1/accounts/by-id/%d", acct); r.URL.Path != want {
+			t.Errorf("path = %s, want %s", r.URL.Path, want)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"account":{"id":%d,"idp_subject":%q,"email":"bridge@local"}}`, acct, idpSub)
+		_, _ = fmt.Fprintf(w, `{"id":%d,"lurus_id":"LU0070011","zitadel_sub":%q,"idp_subject":%q,"email":"bridge@local","status":1}`, acct, idpSub, idpSub)
 	}))
 	defer srv.Close()
 	prevURL := common.IdentityServiceURL
@@ -216,9 +224,17 @@ func TestAuthHelper_IdentitySessionToken_ResolvesNonDefaultTenantUser(t *testing
 	common.IdentitySessionSecret = "session-secret-gap-r3-tenantx"
 	defer func() { common.IdentitySessionSecret = prevSecret }()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// platform GET /internal/v1/accounts/by-id/:id returns the flat
+		// entity.Account (idp_subject via Account.MarshalJSON). The overview
+		// endpoint's AccountSummary has no subject at all.
+		if want := fmt.Sprintf("/internal/v1/accounts/by-id/%d", acct); r.URL.Path != want {
+			t.Errorf("path = %s, want %s", r.URL.Path, want)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"account":{"id":%d,"idp_subject":%q,"email":"bridgex@local"}}`, acct, idpSub)
+		_, _ = fmt.Fprintf(w, `{"id":%d,"lurus_id":"LU0070011","zitadel_sub":%q,"idp_subject":%q,"email":"bridgex@local","status":1}`, acct, idpSub, idpSub)
 	}))
 	defer srv.Close()
 	prevURL := common.IdentityServiceURL

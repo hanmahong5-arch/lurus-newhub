@@ -1727,3 +1727,45 @@ func TestInteg_DeleteUser_InvalidId(t *testing.T) {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
+
+// TestInteg_Topup_WalletLedgerRefusesLinkedUser: with the platform wallet as
+// the only balance, an internal top-up for a platform-linked user is refused
+// (409 WALLET_IS_LEDGER) and users.quota is untouched.
+func TestInteg_Topup_WalletLedgerRefusesLinkedUser(t *testing.T) {
+	router, cleanup := SetupIntegrationRouter(t)
+	t.Cleanup(cleanup)
+
+	prevUnified, prevAdvisory := common.BillingUnifiedEnabled(), common.LocalLedgerAdvisory()
+	t.Cleanup(func() {
+		common.SetBillingUnifiedEnabled(prevUnified)
+		common.SetLocalLedgerAdvisory(prevAdvisory)
+	})
+	common.SetBillingUnifiedEnabled(true)
+	common.SetLocalLedgerAdvisory(true)
+
+	if err := repo.DB.Model(&repo.User{}).Where("id = ?", 2).Update("lurus_account_id", int64(777)).Error; err != nil {
+		t.Fatalf("link user: %v", err)
+	}
+	before, err := repo.GetUserQuota(2, true)
+	if err != nil {
+		t.Fatalf("read quota: %v", err)
+	}
+
+	w := internalRequest(router, "POST", "/internal/balance/topup", map[string]interface{}{
+		"user_id":    2,
+		"amount_rmb": 10.0,
+		"reason":     "linked user topup",
+		"order_id":   "order_wallet_ledger_001",
+	}, authHeaders())
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d, body: %s", w.Code, w.Body.String())
+	}
+	resp := parseResponse(t, w)
+	if resp["error_code"] != "WALLET_IS_LEDGER" || resp["topup_url"] != common.IdentityTopupURL() {
+		t.Errorf("error_code=%v topup_url=%v, want WALLET_IS_LEDGER and %s", resp["error_code"], resp["topup_url"], common.IdentityTopupURL())
+	}
+	after, _ := repo.GetUserQuota(2, true)
+	if after != before {
+		t.Errorf("quota changed on refusal: before=%d after=%d", before, after)
+	}
+}
