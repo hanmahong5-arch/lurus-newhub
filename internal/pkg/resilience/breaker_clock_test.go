@@ -105,8 +105,10 @@ func TestBreakerClock_ProbeOutcomes(t *testing.T) {
 	if got := r.GetState(3); got != StateClosed {
 		t.Fatalf("probe success left state %s, want closed", got)
 	}
-	if !r.Allow(3) || !r.Allow(3) {
-		t.Fatal("closed breaker must admit everyone")
+	for i := 0; i < 2; i++ {
+		if !r.Allow(3) {
+			t.Fatalf("closed breaker refused admission %d; it must admit everyone", i+1)
+		}
 	}
 
 	r.RecordFailure(3) // threshold 1 -> open

@@ -34,7 +34,7 @@ import (
 // the handlers' incomplete-stream error (502/504), which IsUpstreamFailure
 // already counts: it used to arrive as nil and be recorded as a success.
 func reportBreakerOutcome(channelID int, err *types.NewAPIError, endReason string) {
-	reportBreakerOutcomeCtx(nil, channelID, err, endReason)
+	reportBreakerOutcomeCtx(context.Background(), channelID, err, endReason)
 }
 
 // reportBreakerOutcomeCtx is reportBreakerOutcome plus the request context,

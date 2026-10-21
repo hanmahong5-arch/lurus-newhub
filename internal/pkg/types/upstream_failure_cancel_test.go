@@ -48,7 +48,10 @@ func realTransportError(t *testing.T, mkCtx func() (context.Context, context.Can
 		time.Sleep(30 * time.Millisecond)
 		endIt(cancel)
 	}()
-	_, doErr := (&http.Client{}).Do(req)
+	resp, doErr := (&http.Client{}).Do(req)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
 	if doErr == nil {
 		t.Fatal("client.Do unexpectedly succeeded")
 	}
