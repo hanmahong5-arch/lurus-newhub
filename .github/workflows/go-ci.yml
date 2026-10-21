@@ -91,7 +91,7 @@ jobs:
           echo '<!doctype html><title>stub</title>' > web/dist/next/index.html
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.10'
           cache: ${{ !vars.CI_RUNS_ON }}
       - run: go build ./...
       - name: Entitlement kit resolves + its verifier tests pass (lurus-entkit)
@@ -204,7 +204,7 @@ jobs:
           echo '<!doctype html><title>stub</title>' > web/dist/next/index.html
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.10'
           cache: ${{ !vars.CI_RUNS_ON }}
       - name: Check per-package coverage (statement-weighted)
         env:
@@ -387,7 +387,7 @@ jobs:
           echo '<!doctype html><title>stub</title>' > web/dist/next/index.html
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.10'
           cache: ${{ !vars.CI_RUNS_ON }}
       - run: go vet ./...
 
@@ -422,7 +422,7 @@ jobs:
           echo '<!doctype html><title>stub</title>' > web/dist/next/index.html
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.10'
           cache: ${{ !vars.CI_RUNS_ON }}
       - name: Install gosec (pinned)
         # Pinned 2026-08-17, was @latest. @latest is both a supply-chain hole
@@ -477,7 +477,7 @@ jobs:
           echo '<!doctype html><title>stub</title>' > web/dist/next/index.html
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.10'
           cache: ${{ !vars.CI_RUNS_ON }}
       - name: Run govulncheck (pinned)
         # Pinned for the two reasons gosec's pin gives above. v1.8.0 is the
@@ -532,7 +532,7 @@ jobs:
           echo '<!doctype html><title>stub</title>' > web/dist/next/index.html
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.10'
           cache: ${{ !vars.CI_RUNS_ON }}
       - name: golangci-lint (curated linters; ratchet — gate only new findings)
         # Pre-existing findings across the module are a known baseline and are NOT
@@ -596,7 +596,7 @@ jobs:
           echo '<!doctype html><title>stub</title>' > web/dist/next/index.html
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.10'
           cache: ${{ !vars.CI_RUNS_ON }}
       # -race needs CGO; ubuntu-latest ships gcc, so CGO_ENABLED defaults to 1.
       # -short keeps it to the hermetic suite (Postgres/MinIO integration tests
@@ -723,7 +723,7 @@ jobs:
           echo '<!doctype html><title>stub</title>' > web/dist/next/index.html
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.10'
           cache: ${{ !vars.CI_RUNS_ON }}
       - name: go test repo + migration + entity packages against Postgres
         # -short skips the !testing.Short() stress tests; the PG integration tests
@@ -807,7 +807,7 @@ jobs:
           echo '<!doctype html><title>stub</title>' > web/dist/next/index.html
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.10'
           cache: ${{ !vars.CI_RUNS_ON }}
       - name: Install golangci-lint (pinned, same version as the lint job)
         # Installed directly rather than via golangci-lint-action because this
