@@ -1,5 +1,6 @@
 # Runbook — Channel Circuit Breaker Stuck Open
 
+> **Semantics** (what trips it, what does not, half-open, `CB_*` env): see [circuit-breaker](circuit-breaker.md). To keep a model serving while its provider is down, see [routing-fallback](routing-fallback.md).
 > **Source**: netdata alarm `newhub_channel_breaker_open`,
 > `deploy/r6-host-netdata/health.d/newhub.conf` (see the file's "STATUS"
 > header for whether it is installed on R6 today).

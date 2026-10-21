@@ -640,3 +640,10 @@ results = r.json()["results"]   # 按 relevance_score 降序;每项 {index, rele
 - **模型与端点不匹配**:拿对话模型调 `/v1/rerank`(或反之)时,在 `ROUTING_MODALITY_FILTER=enforce` 下返回 501 `provider_capability_not_supported`,`error.details.reasons[]` 说明原因与受影响路由数;默认的 `observe` 只记日志不拦截。
 - **rerank 的 search unit 计价**:管理员给该 rerank 模型配了 `SearchUnitPrice` 后,按 `ceil(文档数/100) × 1` 个检索单位计费,与 token 数无关,所以一次请求塞 100 篇和 1 篇文档价格相同,101 篇则翻倍;没配则回落 token 计价。费用从响应头 `X-Request-Cost` 或日志的 `usage_unit` / `usage_quantity` 查,细则见 `doc/runbook/retrieval-metering.md`。控制台的 Dashboard 可按接口类型 / 计费单位分组看用量。
 - 错误体沿用 OpenAI 信封(`error.message` / `error.code`),各框架按 HTTP 状态码映射异常;完整的错误码枚举见 `docs/openapi/relay.json` 的 `GatewayError`。
+
+### O. 上游故障时的行为:503 + `Retry-After` 与可选的跨供应商兜底(cycle-24)
+
+- 一个模型的所有候选渠道都因熔断被跳过时,网关直接返回 `503` 并带 `Retry-After`(目前 30 s),不计费、不再内部重试;调用方应带抖动退避,不要紧循环。`context canceled` 是调用方自己挂断,不会推动熔断。语义与状态查看方法见 `doc/runbook/circuit-breaker.md`。
+- 租户管理员可为某个模型配置**兜底策略**(`routing_policies.strategy = "fallback"`,API 为 `PUT /api/v2/{tenant}/routing-policies/{model}`):主模型无渠道或渠道全部熔断时,请求被改写到有序候选里第一个可用的备用模型。**永久 opt-in**,不配置就与以前逐字节一致;主、备必须是不同供应商。
+- 兜底只覆盖 `/v1/chat/completions` 与 `/v1/responses` 的首轮纯文本请求;其他端点(embeddings、rerank、原生格式)、带 tools / 多轮 / 多模态 / 推理 / `pin:` `audit:true` 的请求都不会被改写。
+- 命中策略(且在上述两个端点上)的响应带 `X-Routed-Model`(实际服务的模型)与 `X-Routing-Reason: fallback:<primary_ok|no_channel|primary_unavailable|ineligible|no_candidate>`,计费按实际服务的模型。配置步骤、资格规则与排障见 `doc/runbook/routing-fallback.md`。

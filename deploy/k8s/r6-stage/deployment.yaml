@@ -255,6 +255,11 @@ spec:
               value: "master"
             - name: SYNC_FREQUENCY
               value: "60"
+            # Circuit breaker: a run of upstream failures only trips a channel
+            # if the failures fall within 5 minutes of each other; older ones
+            # are forgotten (resilience.Config.FailureWindow, default off).
+            - name: CB_FAILURE_WINDOW_SEC
+              value: "300"
             # OpenRouter free-model sync loop (openrouter_sync.AutoSyncWithContext):
             # checks every 60 min which sync jobs are due; the free-pool job
             # itself is scheduled daily. Unset = the loop never starts, which

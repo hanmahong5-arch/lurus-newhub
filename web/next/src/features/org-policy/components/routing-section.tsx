@@ -23,22 +23,47 @@ import {
 import {
   MAX_CANDIDATES,
   MAX_CRITERIA_BYTES,
+  MAX_FALLBACK_CANDIDATES,
   MAX_INSTRUCTIONS_BYTES,
   addressable,
   blankCandidate,
   byteLength,
   emptyDraft,
+  moveCandidate,
+  nextBackupId,
   validateDraft,
   type RoutingCandidate,
   type RoutingDraft,
   type RoutingError,
+  type RoutingStrategy,
 } from '../lib/routing'
 
 function useErrorText() {
   const { t } = useTranslation()
-  return (e: RoutingError): string => {
+  return (e: RoutingError, strategy: RoutingStrategy): string => {
     const n = 'index' in e ? e.index + 1 : 0
+    if (strategy === 'fallback') {
+      // Backup rows are named "Backup n", not "Candidate n".
+      switch (e.code) {
+        case 'candidate-model':
+          return t('Backup {{n}}: choose a model (up to 128 bytes).', { n })
+        case 'criteria-too-long':
+          return t('Backup {{n}}: the note can be at most {{max}} bytes.', {
+            n,
+            max: MAX_CRITERIA_BYTES,
+          })
+      }
+    }
     switch (e.code) {
+      case 'fallback-count':
+        return t('A fallback policy needs between 1 and {{max}} backup models.', {
+          max: MAX_FALLBACK_CANDIDATES,
+        })
+      case 'fallback-model-public':
+        return t(
+          'Backup {{n}}: choose a model other than the one being protected.',
+          { n }
+        )
       case 'candidates-count':
         return t('A policy needs between 1 and {{max}} candidates.', {
           max: MAX_CANDIDATES,
@@ -90,11 +115,164 @@ function errorKey(e: RoutingError): string {
   return 'index' in e ? `${e.code}:${e.index}` : e.code
 }
 
-function PolicyForm(props: { model: string; stored: RoutingDraft | null }) {
+function StrategyChoice(props: {
+  value: RoutingStrategy
+  onChange: (s: RoutingStrategy) => void
+}) {
+  const { t } = useTranslation()
+  const options: { id: RoutingStrategy; title: string; desc: string }[] = [
+    {
+      id: 'decision',
+      title: t('Decision routing'),
+      desc: t(
+        'A decision model reads each request and picks the candidate that should serve it.'
+      ),
+    },
+    {
+      id: 'fallback',
+      title: t('Fallback'),
+      desc: t(
+        "When every channel of this model is down or absent, the request goes to the first available backup model, billed at the backup model's price."
+      ),
+    },
+  ]
+  return (
+    <div
+      role='radiogroup'
+      aria-label={t('Routing strategy')}
+      className='grid gap-3 md:grid-cols-2'
+    >
+      {options.map((o) => {
+        const checked = props.value === o.id
+        return (
+          <button
+            key={o.id}
+            type='button'
+            role='radio'
+            aria-checked={checked}
+            aria-label={o.title}
+            onClick={() => props.onChange(o.id)}
+            className={`rounded-lg border p-3 text-left ${
+              checked ? 'border-primary bg-accent' : 'hover:bg-accent/50'
+            }`}
+          >
+            <span className='block text-sm font-medium'>{o.title}</span>
+            <span className='text-muted-foreground block text-xs'>
+              {o.desc}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function FallbackEditor(props: {
+  model: string
+  models: string[]
+  list: RoutingDraft['fallbackCandidates']
+  onChange: (next: RoutingDraft['fallbackCandidates']) => void
+}) {
+  const { t } = useTranslation()
+  const { model, models, list, onChange } = props
+  const atLimit = list.length >= MAX_FALLBACK_CANDIDATES
+  const setModel = (i: number, value: string) =>
+    onChange(list.map((c, j) => (j === i ? { ...c, model: value } : c)))
+  return (
+    <div className='space-y-3' data-testid='routing-fallback-editor'>
+      <div className='flex items-center justify-between'>
+        <h3 className='text-sm font-medium'>
+          {t('Backup models')} ({list.length}/{MAX_FALLBACK_CANDIDATES})
+        </h3>
+        <Button
+          variant='outline'
+          size='sm'
+          disabled={atLimit}
+          onClick={() =>
+            onChange([...list, blankCandidate({ id: nextBackupId(list) })])
+          }
+        >
+          {t('Add backup model')}
+        </Button>
+      </div>
+      <p className='text-muted-foreground text-xs'>
+        {t(
+          'Tried in order from top to bottom. The first backup that has an available channel serves the request.'
+        )}
+      </p>
+      <ul className='space-y-2'>
+        {list.map((c, i) => {
+          // Offer routable models, never the protected one; keep a stored
+          // value visible even if it has since left the routable list.
+          const options = models.filter((m) => m !== model)
+          if (c.model !== '' && !options.includes(c.model)) {
+            options.unshift(c.model)
+          }
+          return (
+            <li
+              key={c.uid}
+              className='flex items-center gap-2 rounded-lg border p-3'
+              data-testid={`routing-backup-${i}`}
+            >
+              <span className='text-muted-foreground w-6 text-sm tabular-nums'>
+                {i + 1}
+              </span>
+              <select
+                value={c.model}
+                onChange={(e) => setModel(i, e.target.value)}
+                aria-label={t('Backup {{n}} model', { n: i + 1 })}
+                className='border-input h-9 min-w-0 flex-1 rounded-lg border bg-transparent px-2 font-mono text-sm'
+              >
+                <option value=''>{t('Choose a model')}</option>
+                {options.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+              <Button
+                variant='ghost'
+                size='sm'
+                disabled={i === 0}
+                onClick={() => onChange(moveCandidate(list, i, -1))}
+                aria-label={t('Move backup {{n}} up', { n: i + 1 })}
+              >
+                {t('Move up')}
+              </Button>
+              <Button
+                variant='ghost'
+                size='sm'
+                disabled={i === list.length - 1}
+                onClick={() => onChange(moveCandidate(list, i, 1))}
+                aria-label={t('Move backup {{n}} down', { n: i + 1 })}
+              >
+                {t('Move down')}
+              </Button>
+              <Button
+                variant='ghost'
+                size='sm'
+                onClick={() => onChange(list.filter((_, j) => j !== i))}
+                aria-label={t('Remove backup {{n}}', { n: i + 1 })}
+              >
+                {t('Remove')}
+              </Button>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
+function PolicyForm(props: {
+  model: string
+  models: string[]
+  stored: RoutingDraft | null
+}) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const errorText = useErrorText()
-  const { model, stored } = props
+  const { model, models, stored } = props
   const [draft, setDraft] = useState<RoutingDraft>(
     () => stored ?? emptyDraft(model)
   )
@@ -138,8 +316,12 @@ function PolicyForm(props: { model: string; stored: RoutingDraft | null }) {
     const errs = validateDraft(draft, model)
     setErrors(errs)
     if (errs.length > 0) return
-    // Turning routing on rewrites live requests: ask once.
-    if (draft.enabled && !(stored?.enabled ?? false)) {
+    // Turning routing on, or changing the strategy of a live policy,
+    // rewrites live requests: ask once.
+    if (
+      draft.enabled &&
+      (!(stored?.enabled ?? false) || stored?.strategy !== draft.strategy)
+    ) {
       setConfirmEnable(true)
       return
     }
@@ -148,9 +330,18 @@ function PolicyForm(props: { model: string; stored: RoutingDraft | null }) {
 
   const busy = save.isPending || remove.isPending
   const atLimit = draft.candidates.length >= MAX_CANDIDATES
+  const isFallback = draft.strategy === 'fallback'
 
   return (
     <div className='space-y-5' data-testid='routing-editor'>
+      <StrategyChoice
+        value={draft.strategy}
+        onChange={(v) => {
+          set('strategy', v)
+          setErrors([])
+        }}
+      />
+
       <div className='flex items-center justify-between gap-3 rounded-lg border p-3'>
         <div>
           <Label>{t('Enabled')}</Label>
@@ -165,138 +356,149 @@ function PolicyForm(props: { model: string; stored: RoutingDraft | null }) {
         />
       </div>
 
-      <div className='grid gap-4 md:grid-cols-2'>
-        <div className='grid gap-1.5'>
-          <Label htmlFor='routing-evaluator'>{t('Evaluator model')}</Label>
-          <Input
-            id='routing-evaluator'
-            value={draft.evaluatorModel}
-            onChange={(e) => set('evaluatorModel', e.target.value)}
-            className='font-mono'
-          />
-        </div>
-        <div className='grid gap-1.5'>
-          <Label htmlFor='routing-confidence'>
-            {t('Confidence threshold')}
-          </Label>
-          <Input
-            id='routing-confidence'
-            inputMode='decimal'
-            value={draft.minConfidence}
-            onChange={(e) => set('minConfidence', e.target.value)}
-          />
-          <p className='text-muted-foreground text-xs'>
-            {t('Between 0 and 1. Below it the default candidate is used.')}
-          </p>
-        </div>
-      </div>
-
-      <div className='grid gap-1.5'>
-        <Label htmlFor='routing-instructions'>{t('Instructions')}</Label>
-        <Textarea
-          id='routing-instructions'
-          value={draft.instructions}
-          onChange={(e) => set('instructions', e.target.value)}
+      {isFallback ? (
+        <FallbackEditor
+          model={model}
+          models={models}
+          list={draft.fallbackCandidates}
+          onChange={(next) => set('fallbackCandidates', next)}
         />
-        <p className='text-muted-foreground text-xs'>
-          {byteLength(draft.instructions)} / {MAX_INSTRUCTIONS_BYTES}{' '}
-          {t('bytes')}
-        </p>
-      </div>
-
-      <div className='space-y-3'>
-        <div className='flex items-center justify-between'>
-          <h3 className='text-sm font-medium'>
-            {t('Candidates')} ({draft.candidates.length}/{MAX_CANDIDATES})
-          </h3>
-          <Button
-            variant='outline'
-            size='sm'
-            disabled={atLimit}
-            onClick={() =>
-              set('candidates', [...draft.candidates, blankCandidate()])
-            }
-          >
-            {t('Add candidate')}
-          </Button>
-        </div>
-        <ul className='space-y-3'>
-          {draft.candidates.map((c, i) => (
-            <li
-              key={c.uid}
-              className='space-y-2 rounded-lg border p-3'
-              data-testid={`routing-candidate-${i}`}
-            >
-              <div className='grid gap-2 md:grid-cols-[1fr_1fr_auto]'>
-                <Input
-                  value={c.id}
-                  onChange={(e) => setCand(i, { id: e.target.value })}
-                  placeholder={t('Candidate id')}
-                  aria-label={t('Candidate {{n}} id', { n: i + 1 })}
-                  className='font-mono'
-                />
-                <Input
-                  value={c.model}
-                  onChange={(e) => setCand(i, { model: e.target.value })}
-                  placeholder={t('Model')}
-                  aria-label={t('Candidate {{n}} model', { n: i + 1 })}
-                  className='font-mono'
-                />
-                <Button
-                  variant='ghost'
-                  size='sm'
-                  disabled={draft.candidates.length <= 1}
-                  onClick={() =>
-                    set(
-                      'candidates',
-                      draft.candidates.filter((_, j) => j !== i)
-                    )
-                  }
-                  aria-label={t('Remove candidate {{n}}', { n: i + 1 })}
-                >
-                  {t('Remove')}
-                </Button>
-              </div>
-              <Textarea
-                value={c.criteria}
-                onChange={(e) => setCand(i, { criteria: e.target.value })}
-                placeholder={t('When should this candidate be chosen?')}
-                aria-label={t('Candidate {{n}} criteria', { n: i + 1 })}
+      ) : (
+        <>
+          <div className='grid gap-4 md:grid-cols-2'>
+            <div className='grid gap-1.5'>
+              <Label htmlFor='routing-evaluator'>{t('Evaluator model')}</Label>
+              <Input
+                id='routing-evaluator'
+                value={draft.evaluatorModel}
+                onChange={(e) => set('evaluatorModel', e.target.value)}
+                className='font-mono'
+              />
+            </div>
+            <div className='grid gap-1.5'>
+              <Label htmlFor='routing-confidence'>
+                {t('Confidence threshold')}
+              </Label>
+              <Input
+                id='routing-confidence'
+                inputMode='decimal'
+                value={draft.minConfidence}
+                onChange={(e) => set('minConfidence', e.target.value)}
               />
               <p className='text-muted-foreground text-xs'>
-                {byteLength(c.criteria)} / {MAX_CRITERIA_BYTES} {t('bytes')}
+                {t('Between 0 and 1. Below it the default candidate is used.')}
               </p>
-            </li>
-          ))}
-        </ul>
-      </div>
+            </div>
+          </div>
 
-      <div className='grid gap-1.5 md:w-1/2'>
-        <Label htmlFor='routing-default'>{t('Default candidate')}</Label>
-        <select
-          id='routing-default'
-          value={draft.defaultCandidate}
-          onChange={(e) => set('defaultCandidate', e.target.value)}
-          className='border-input h-9 rounded-lg border bg-transparent px-2 text-sm'
-        >
-          <option value=''>{t('The requested model itself')}</option>
-          {draft.candidates
-            .filter((c) => c.id !== '')
-            .map((c) => (
-              <option key={c.uid} value={c.id}>
-                {c.id}
-              </option>
-            ))}
-        </select>
-        <p className='text-muted-foreground text-xs'>
-          {t('Used when the evaluator cannot decide or is not confident.')}
-        </p>
-      </div>
+          <div className='grid gap-1.5'>
+            <Label htmlFor='routing-instructions'>{t('Instructions')}</Label>
+            <Textarea
+              id='routing-instructions'
+              value={draft.instructions}
+              onChange={(e) => set('instructions', e.target.value)}
+            />
+            <p className='text-muted-foreground text-xs'>
+              {byteLength(draft.instructions)} / {MAX_INSTRUCTIONS_BYTES}{' '}
+              {t('bytes')}
+            </p>
+          </div>
+
+          <div className='space-y-3'>
+            <div className='flex items-center justify-between'>
+              <h3 className='text-sm font-medium'>
+                {t('Candidates')} ({draft.candidates.length}/{MAX_CANDIDATES})
+              </h3>
+              <Button
+                variant='outline'
+                size='sm'
+                disabled={atLimit}
+                onClick={() =>
+                  set('candidates', [...draft.candidates, blankCandidate()])
+                }
+              >
+                {t('Add candidate')}
+              </Button>
+            </div>
+            <ul className='space-y-3'>
+              {draft.candidates.map((c, i) => (
+                <li
+                  key={c.uid}
+                  className='space-y-2 rounded-lg border p-3'
+                  data-testid={`routing-candidate-${i}`}
+                >
+                  <div className='grid gap-2 md:grid-cols-[1fr_1fr_auto]'>
+                    <Input
+                      value={c.id}
+                      onChange={(e) => setCand(i, { id: e.target.value })}
+                      placeholder={t('Candidate id')}
+                      aria-label={t('Candidate {{n}} id', { n: i + 1 })}
+                      className='font-mono'
+                    />
+                    <Input
+                      value={c.model}
+                      onChange={(e) => setCand(i, { model: e.target.value })}
+                      placeholder={t('Model')}
+                      aria-label={t('Candidate {{n}} model', { n: i + 1 })}
+                      className='font-mono'
+                    />
+                    <Button
+                      variant='ghost'
+                      size='sm'
+                      disabled={draft.candidates.length <= 1}
+                      onClick={() =>
+                        set(
+                          'candidates',
+                          draft.candidates.filter((_, j) => j !== i)
+                        )
+                      }
+                      aria-label={t('Remove candidate {{n}}', { n: i + 1 })}
+                    >
+                      {t('Remove')}
+                    </Button>
+                  </div>
+                  <Textarea
+                    value={c.criteria}
+                    onChange={(e) => setCand(i, { criteria: e.target.value })}
+                    placeholder={t('When should this candidate be chosen?')}
+                    aria-label={t('Candidate {{n}} criteria', { n: i + 1 })}
+                  />
+                  <p className='text-muted-foreground text-xs'>
+                    {byteLength(c.criteria)} / {MAX_CRITERIA_BYTES} {t('bytes')}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className='grid gap-1.5 md:w-1/2'>
+            <Label htmlFor='routing-default'>{t('Default candidate')}</Label>
+            <select
+              id='routing-default'
+              value={draft.defaultCandidate}
+              onChange={(e) => set('defaultCandidate', e.target.value)}
+              className='border-input h-9 rounded-lg border bg-transparent px-2 text-sm'
+            >
+              <option value=''>{t('The requested model itself')}</option>
+              {draft.candidates
+                .filter((c) => c.id !== '')
+                .map((c) => (
+                  <option key={c.uid} value={c.id}>
+                    {c.id}
+                  </option>
+                ))}
+            </select>
+            <p className='text-muted-foreground text-xs'>
+              {t('Used when the evaluator cannot decide or is not confident.')}
+            </p>
+          </div>
+        </>
+      )}
 
       {errors.length > 0 && (
         <ul role='alert' className='text-destructive space-y-0.5 text-sm'>
           {errors.map((e) => (
-            <li key={errorKey(e)}>{errorText(e)}</li>
+            <li key={errorKey(e)}>{errorText(e, draft.strategy)}</li>
           ))}
         </ul>
       )}
@@ -319,11 +521,22 @@ function PolicyForm(props: { model: string; stored: RoutingDraft | null }) {
       <ConfirmDialog
         open={confirmEnable}
         onOpenChange={setConfirmEnable}
-        title={t('Enable decision routing?')}
-        desc={t(
-          'Requests for "{{model}}" will be sent to the evaluator and may be rewritten to another model. Every rewrite is announced in response headers and audited.',
-          { model }
-        )}
+        title={
+          isFallback
+            ? t('Enable fallback routing?')
+            : t('Enable decision routing?')
+        }
+        desc={
+          isFallback
+            ? t(
+                "When every channel of \"{{model}}\" is down or absent, requests will be sent to the first available backup model and billed at that model's price. Every reroute is announced in response headers and audited.",
+                { model }
+              )
+            : t(
+                'Requests for "{{model}}" will be sent to the evaluator and may be rewritten to another model. Every rewrite is announced in response headers and audited.',
+                { model }
+              )
+        }
         confirmText={t('Enable')}
         isLoading={save.isPending}
         handleConfirm={() => save.mutate()}
@@ -332,10 +545,17 @@ function PolicyForm(props: { model: string; stored: RoutingDraft | null }) {
         open={confirmDelete}
         onOpenChange={setConfirmDelete}
         title={t('Delete this policy?')}
-        desc={t(
-          'Requests for "{{model}}" will no longer be routed by a decision model.',
-          { model }
-        )}
+        desc={
+          stored?.strategy === 'fallback'
+            ? t(
+                'Requests for "{{model}}" will no longer fall back to backup models.',
+                { model }
+              )
+            : t(
+                'Requests for "{{model}}" will no longer be routed by a decision model.',
+                { model }
+              )
+        }
         confirmText={t('Delete')}
         destructive
         isLoading={remove.isPending}
@@ -345,7 +565,7 @@ function PolicyForm(props: { model: string; stored: RoutingDraft | null }) {
   )
 }
 
-function PolicyEditor(props: { model: string }) {
+function PolicyEditor(props: { model: string; models: string[] }) {
   const { t } = useTranslation()
   const q = useQuery(routingPolicyQueryOptions(props.model))
   if (q.isPending) return <LoadingState />
@@ -363,6 +583,7 @@ function PolicyEditor(props: { model: string }) {
     <PolicyForm
       key={`${props.model}:${JSON.stringify(q.data)}`}
       model={props.model}
+      models={props.models}
       stored={q.data}
     />
   )
@@ -388,7 +609,7 @@ export function RoutingSection() {
     <div className='space-y-4'>
       <p className='text-muted-foreground text-sm'>
         {t(
-          'Let a decision model pick which candidate serves a request for a public model. Off by default; each rewrite is announced and audited.'
+          'Choose how requests for a public model are routed: let a decision model pick the serving candidate, or fall back to backup models when the model is down. Off by default; each reroute is announced and audited.'
         )}
       </p>
       {list.length === 0 ? (
@@ -417,7 +638,7 @@ export function RoutingSection() {
           ))}
         </ul>
       )}
-      {selected !== null && <PolicyEditor key={selected} model={selected} />}
+      {selected !== null && <PolicyEditor key={selected} model={selected} models={list} />}
     </div>
   )
 }

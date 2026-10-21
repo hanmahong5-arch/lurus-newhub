@@ -10,6 +10,7 @@ import (
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/provider/openrouter"
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 
 	"gorm.io/gorm"
@@ -50,11 +51,16 @@ func defaultFetcher(baseURL string) FetcherFunc {
 
 // RunResult summarizes one Run() invocation, suitable for logging or API response.
 type RunResult struct {
-	FetchedTotal     int      `json:"fetched_total"`
-	FreeTotal        int      `json:"free_total"`
-	ManagedNewCount  int      `json:"managed_new_count"`
-	Added            []string `json:"added"`
-	Removed          []string `json:"removed"`
+	FetchedTotal    int      `json:"fetched_total"`
+	FreeTotal       int      `json:"free_total"`
+	ManagedNewCount int      `json:"managed_new_count"`
+	Added           []string `json:"added"`
+	Removed         []string `json:"removed"`
+	// RegionBlocked lists still-listed free models the per-model prober found
+	// refused for regional reasons (ReasonRegionBlocked). They are not offered
+	// as new pool members and hold no TopN slot; one already in the pool stays
+	// on the channel only so the prober can notice when it recovers.
+	RegionBlocked    []string `json:"region_blocked,omitempty"`
 	CircuitBreakerOn bool     `json:"circuit_breaker_on"`
 	Skipped          bool     `json:"skipped"` // true if no due jobs and not forced
 	SkipReason       string   `json:"skip_reason,omitempty"`
@@ -161,7 +167,7 @@ func (e *Engine) Run(ctx context.Context, manualOnlyJobIDs []int, force bool) (*
 
 	// 5. Apply per-channel transactions.
 	for channelID, grp := range channelGroups {
-		added, removed, breakerTripped, applyErr := e.applyChannel(ctx, channelID, grp, freeAll, len(fetched), usage, force)
+		added, removed, blocked, breakerTripped, applyErr := e.applyChannel(ctx, channelID, grp, freeAll, len(fetched), usage, force)
 		if applyErr != nil {
 			// Persist LastError on every due job tied to this channel and continue with other channels.
 			for _, dj := range grp.dueJobs {
@@ -176,6 +182,7 @@ func (e *Engine) Run(ctx context.Context, manualOnlyJobIDs []int, force bool) (*
 		}
 		result.Added = append(result.Added, added...)
 		result.Removed = append(result.Removed, removed...)
+		result.RegionBlocked = append(result.RegionBlocked, blocked...)
 		result.ManagedNewCount += len(added)
 
 		// Mark due jobs as run.
@@ -237,9 +244,9 @@ func (e *Engine) applyChannel(
 	fetchedTotal int,
 	usage UsageMap,
 	force bool,
-) (added, removed []string, breakerTripped bool, err error) {
+) (added, removed, regionBlocked []string, breakerTripped bool, err error) {
 
-	var addedOut, removedOut []string
+	var addedOut, removedOut, blockedOut []string
 
 	txErr := repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		ch, err := repo.GetChannelForUpdate(tx, channelID)
@@ -253,6 +260,22 @@ func (e *Engine) applyChannel(
 			return &CircuitBreakerError{Got: fetchedTotal, Baseline: ch.LastSyncFetchCount}
 		}
 
+		managedOld := setFromSlice(ch.GetManagedModelsBySync())
+		current := setFromSlice(ch.GetModels())
+
+		// Models the prober found region-blocked on this channel. They are
+		// kept out of the ranking so a blocked model neither enters the pool
+		// nor holds a TopN slot a working model could use.
+		// Only rows for models the channel still lists count: the prober
+		// re-checks listed models only, so a row for an unlisted model (delisted
+		// then relisted, or removed by an admin) can never be cleared and must
+		// not keep the model out. Such a model is re-added and re-probed.
+		blocked := loadRegionBlockedModels(tx, channelID, setUnion(current, managedOld))
+		freeIDs := make(map[string]struct{}, len(freeAll))
+		for _, m := range freeAll {
+			freeIDs[m.ID] = struct{}{}
+		}
+
 		// Compute managedNew = union over all enabled jobs targeting this channel.
 		managedNew := make(map[string]struct{})
 		for _, j := range grp.allJobs {
@@ -262,6 +285,9 @@ func (e *Engine) applyChannel(
 			}
 			subset := make([]openrouter.Model, 0, len(freeAll))
 			for _, m := range freeAll {
+				if _, isBlocked := blocked[m.ID]; isBlocked {
+					continue
+				}
 				if MatchesAny(m.Architecture.InputModalities, m.Architecture.OutputModalities, cats) {
 					subset = append(subset, m)
 				}
@@ -272,8 +298,21 @@ func (e *Engine) applyChannel(
 			}
 		}
 
-		managedOld := setFromSlice(ch.GetManagedModelsBySync())
-		current := setFromSlice(ch.GetModels())
+		// A blocked model already in the pool stays on the channel: the
+		// prober only re-checks models the channel lists, so removing it
+		// would make the block permanent. Its abilities are already off
+		// (prober auto-disable), so it is not routed to. A model the
+		// catalogue no longer lists is NOT kept - delisting always removes.
+		for id := range blocked {
+			if _, listed := freeIDs[id]; !listed {
+				continue
+			}
+			blockedOut = append(blockedOut, id)
+			if _, wasManaged := managedOld[id]; wasManaged {
+				managedNew[id] = struct{}{}
+			}
+		}
+		sort.Strings(blockedOut)
 
 		// manual = current − managedOld (preserve admin-added models)
 		manual := setDifference(current, managedOld)
@@ -305,7 +344,7 @@ func (e *Engine) applyChannel(
 	})
 
 	if txErr != nil {
-		return nil, nil, breakerTripped, txErr
+		return nil, nil, nil, breakerTripped, txErr
 	}
 
 	// Auto-create model metadata entries for newly added models (best-effort, outside the channel tx).
@@ -313,7 +352,34 @@ func (e *Engine) applyChannel(
 		ensureModelMetadataEntries(addedOut)
 	}
 
-	return addedOut, removedOut, false, nil
+	return addedOut, removedOut, blockedOut, false, nil
+}
+
+// loadRegionBlockedModels returns the models of one channel whose latest
+// probe was refused for regional reasons (see IsRegionBlocked). It fails open:
+// a missing table or a read error yields an empty set, so a probe-store
+// problem can never shrink the pool - the sync then behaves as it did before
+// the prober existed. Rows for models not in onChannel are stale (the prober
+// no longer visits them) and are ignored.
+func loadRegionBlockedModels(db *gorm.DB, channelID int, onChannel map[string]struct{}) map[string]struct{} {
+	out := make(map[string]struct{})
+	if !db.Migrator().HasTable(&entity.ModelHealth{}) {
+		return out
+	}
+	var rows []entity.ModelHealth
+	if err := db.Where("channel_id = ? AND ok = ?", channelID, false).Find(&rows).Error; err != nil {
+		common.SysLog(fmt.Sprintf("openrouter sync: channel %d: read model health failed, treating no model as region-blocked: %s", channelID, err.Error()))
+		return out
+	}
+	for _, h := range rows {
+		if _, listed := onChannel[h.Model]; !listed {
+			continue
+		}
+		if IsRegionBlocked(h) {
+			out[h.Model] = struct{}{}
+		}
+	}
+	return out
 }
 
 // ensureModelMetadataEntries auto-creates Model rows for newly imported models

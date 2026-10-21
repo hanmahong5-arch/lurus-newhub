@@ -24,6 +24,7 @@ vi.mock('@/lib/api', async (orig) => {
 
 const wire = (over: Record<string, unknown> = {}) => ({
   public_model: 'model-a',
+  strategy: 'decision',
   enabled: false,
   evaluator_model: 'model-e',
   instructions: '',
@@ -36,7 +37,9 @@ const wire = (over: Record<string, unknown> = {}) => ({
 function serve(policy: unknown) {
   get.mockImplementation(async (path: string) => {
     if (path === '/models/routable') {
-      return { items: [{ id: 'model-a' }, { id: 'model-b' }] }
+      return {
+        items: [{ id: 'model-a' }, { id: 'model-b' }, { id: 'model-c' }],
+      }
     }
     if (path === '/routing-policies/model-a') {
       if (policy === null) throw new ApiError('nf', { status: 404 })
@@ -55,7 +58,7 @@ async function openEditor() {
       <OrgPolicyPage />
     </QueryClientProvider>
   )
-  await userEvent.click(screen.getByRole('tab', { name: 'Decision routing' }))
+  await userEvent.click(screen.getByRole('tab', { name: 'Model routing' }))
   await userEvent.click(await screen.findByRole('button', { name: 'model-a' }))
   await screen.findByTestId('routing-editor')
 }
@@ -79,10 +82,14 @@ describe('decision routing tab', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(put).toHaveBeenCalled())
     expect(put.mock.calls[0][0]).toBe('/routing-policies/model-a')
-    expect(put.mock.calls[0][1]).toMatchObject({
+    expect(put.mock.calls[0][1]).toEqual({
+      strategy: 'decision',
       enabled: false,
       evaluator_model: 'model-e',
+      instructions: '',
       min_confidence: 0.65,
+      default_candidate: '',
+      candidates: [{ id: 'c1', model: 'model-a', criteria: 'simple' }],
     })
   })
 

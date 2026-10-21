@@ -21,7 +21,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AxiosError } from 'axios'
 import { useState } from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/lib/api'
 
@@ -41,6 +41,15 @@ vi.mock('@/lib/api', async (orig) => {
 function gate(code = 'VERIFICATION_REQUIRED') {
   return new ApiError('need verification', { status: 403, code })
 }
+
+// input-otp schedules three timers (0/10/50 ms) on every value change and
+// never clears them on unmount. If the last test's timers fire after this
+// file's jsdom is torn down they throw "window is not defined" and vitest
+// fails the run with an unhandled error although every test passed. Let them
+// drain while the environment still exists.
+afterAll(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 100))
+})
 
 describe('stepUpCodeOf / isStepUpRequired', () => {
   it('reads the code off the wrapped axios error body', () => {

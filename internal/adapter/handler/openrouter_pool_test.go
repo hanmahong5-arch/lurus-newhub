@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/domain/entity"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 
@@ -144,5 +145,74 @@ func TestV1OpenRouterApiPool_TenantScoped(t *testing.T) {
 		if !strings.HasPrefix(prefix, raw[:12]) {
 			t.Errorf("key entry %d prefix %q does not start with raw key's first 12 chars %q", i, prefix, raw[:12])
 		}
+	}
+}
+
+// TestV1OpenRouterApiPool_ModelProbeReasons: the pool view names why a probed
+// model is not fully healthy. A region-blocked model reads "region_blocked"
+// (and not available), a rate-limited one reads "rate_limited" but stays
+// available, a healthy one is not listed, and another channel's rows never
+// leak into this channel's snapshot.
+func TestV1OpenRouterApiPool_ModelProbeReasons(t *testing.T) {
+	ctx := SetupV2TestRouter(t)
+	defer ctx.Cleanup()
+
+	if err := ctx.DB.AutoMigrate(&entity.ModelHealth{}); err != nil {
+		t.Fatalf("migrate model_health: %v", err)
+	}
+	ch := seedOpenRouterChannel(t, ctx.DB, ctx.TenantID, "openrouter-reasons-channel")
+	other := seedOpenRouterChannel(t, ctx.DB, ctx.TenantID, "openrouter-other-channel")
+
+	rows := []entity.ModelHealth{
+		{ChannelId: ch.Id, Model: "model-a:free", Ok: true, LastProbeAt: 100},
+		{ChannelId: ch.Id, Model: "model-b:free", Ok: false, AutoDisabled: true, LastProbeAt: 200,
+			LastError: `{"error":{"message":"This model is not available in your region.","code":403,"metadata":{"failed_routing_step":"Gate Endpoints with Geo Restrictions"}}}`},
+		{ChannelId: ch.Id, Model: "model-c:free", Ok: false, LastProbeAt: 300,
+			LastError: "model-c:free is temporarily rate-limited upstream"},
+		{ChannelId: other.Id, Model: "model-d:free", Ok: false, AutoDisabled: true, LastProbeAt: 400,
+			LastError: "This model is not available in your region."},
+	}
+	for i := range rows {
+		if err := ctx.DB.Create(&rows[i]).Error; err != nil {
+			t.Fatalf("seed health: %v", err)
+		}
+	}
+
+	c, w := v1Ctx(http.MethodGet, "/api/openrouter-sync/api-pool", nil,
+		common.RoleRootUser, ctx.TenantID, ctx.RootUser.Id)
+	GetOpenRouterApiPoolStatus(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", w.Code, w.Body.String())
+	}
+	data, _ := v1Body(t, w)["data"].([]interface{})
+
+	byName := map[string]map[string]interface{}{}
+	for _, item := range data {
+		m, _ := item.(map[string]interface{})
+		name, _ := m["channel_name"].(string)
+		byName[name] = m
+	}
+	snap := byName[ch.Name]
+	if snap == nil {
+		t.Fatalf("channel %q missing from %v", ch.Name, byName)
+	}
+	probed, _ := snap["model_probe"].([]interface{})
+	if len(probed) != 2 {
+		t.Fatalf("want 2 unhealthy models (healthy one omitted), got %d: %v", len(probed), probed)
+	}
+	got := map[string]map[string]interface{}{}
+	for _, p := range probed {
+		m, _ := p.(map[string]interface{})
+		model, _ := m["model"].(string)
+		got[model] = m
+	}
+	if b := got["model-b:free"]; b == nil || b["reason"] != "region_blocked" || b["available"] != false {
+		t.Errorf("model-b: want reason=region_blocked available=false, got %v", b)
+	}
+	if cc := got["model-c:free"]; cc == nil || cc["reason"] != "rate_limited" || cc["available"] != true {
+		t.Errorf("model-c: want reason=rate_limited available=true, got %v", cc)
+	}
+	if _, leaked := got["model-d:free"]; leaked {
+		t.Error("another channel's model leaked into this snapshot")
 	}
 }

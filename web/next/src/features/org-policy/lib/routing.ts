@@ -6,6 +6,8 @@
  */
 
 export const MAX_CANDIDATES = 32
+/** Ordered backup models of a fallback policy (server limit). */
+export const MAX_FALLBACK_CANDIDATES = 8
 export const MAX_CRITERIA_BYTES = 2048
 export const MAX_INSTRUCTIONS_BYTES = 4096
 export const MAX_CANDIDATE_ID_LEN = 64
@@ -32,17 +34,29 @@ export function blankCandidate(over: Partial<RoutingCandidate> = {}): DraftCandi
   return { uid: uidSeq, id: '', model: '', criteria: '', ...over }
 }
 
+export type RoutingStrategy = 'decision' | 'fallback'
+
 export interface RoutingDraft {
+  /**
+   * Which strategy the policy uses. Both candidate lists are kept so toggling
+   * the selector never discards what was typed; only the active one is sent.
+   */
+  strategy: RoutingStrategy
   enabled: boolean
   evaluatorModel: string
   instructions: string
   /** Kept as text so a half-typed number is not lost; parsed on validate. */
   minConfidence: string
   defaultCandidate: string
+  /** Decision strategy: candidates the evaluator chooses between. */
   candidates: DraftCandidate[]
+  /** Fallback strategy: ordered backup models, first available wins. */
+  fallbackCandidates: DraftCandidate[]
 }
 
 export type RoutingError =
+  | { code: 'fallback-count' }
+  | { code: 'fallback-model-public'; index: number }
   | { code: 'candidates-count' }
   | { code: 'min-confidence' }
   | { code: 'instructions-too-long' }
@@ -64,12 +78,14 @@ export function byteLength(s: string): number {
 
 export function emptyDraft(publicModel: string): RoutingDraft {
   return {
+    strategy: 'decision',
     enabled: false,
     evaluatorModel: '',
     instructions: '',
     minConfidence: String(DEFAULT_MIN_CONFIDENCE),
     defaultCandidate: '',
     candidates: [blankCandidate({ model: publicModel })],
+    fallbackCandidates: [],
   }
 }
 
@@ -78,7 +94,7 @@ function str(v: unknown): string {
 }
 
 /** GET/PUT answer -> draft. Anything malformed degrades to empty fields. */
-export function draftFromWire(raw: unknown): RoutingDraft {
+export function draftFromWire(raw: unknown, publicModel = ''): RoutingDraft {
   const r =
     typeof raw === 'object' && raw !== null
       ? (raw as Record<string, unknown>)
@@ -88,24 +104,49 @@ export function draftFromWire(raw: unknown): RoutingDraft {
     typeof r.min_confidence === 'number' && Number.isFinite(r.min_confidence)
       ? r.min_confidence
       : DEFAULT_MIN_CONFIDENCE
+  const strategy: RoutingStrategy =
+    r.strategy === 'fallback' ? 'fallback' : 'decision'
+  const mapped = cands.map((c) => {
+    const x =
+      typeof c === 'object' && c !== null ? (c as Record<string, unknown>) : {}
+    return blankCandidate({
+      id: str(x.id),
+      model: str(x.model),
+      criteria: str(x.criteria),
+    })
+  })
+  const isFallback = strategy === 'fallback'
   return {
+    strategy,
     enabled: r.enabled === true,
     evaluatorModel: str(r.evaluator_model),
     instructions: str(r.instructions),
     minConfidence: String(mc),
     defaultCandidate: str(r.default_candidate),
-    candidates: cands.map((c) => {
-      const x =
-        typeof c === 'object' && c !== null
-          ? (c as Record<string, unknown>)
-          : {}
-      return blankCandidate({
-        id: str(x.id),
-        model: str(x.model),
-        criteria: str(x.criteria),
-      })
-    }),
+    // The inactive strategy's list starts from its own editor default, so
+    // switching the selector never shows the other strategy's rows.
+    candidates: isFallback
+      ? [blankCandidate({ model: str(r.public_model) || publicModel })]
+      : mapped,
+    fallbackCandidates: isFallback ? mapped : [],
   }
+}
+
+/** Move item `i` by `delta` (+1 down, -1 up); out of range returns the list unchanged. */
+export function moveCandidate<T>(list: T[], i: number, delta: number): T[] {
+  const j = i + delta
+  if (i < 0 || i >= list.length || j < 0 || j >= list.length) return list
+  const next = [...list]
+  ;[next[i], next[j]] = [next[j], next[i]]
+  return next
+}
+
+/** Smallest `backup-N` id not already used in the list. */
+export function nextBackupId(list: RoutingCandidate[]): string {
+  const used = new Set(list.map((c) => c.id))
+  let n = 1
+  while (used.has(`backup-${n}`)) n += 1
+  return `backup-${n}`
 }
 
 /** Parse the confidence text; null when it is not a finite number in [0, 1]. */
@@ -115,10 +156,29 @@ export function parseConfidence(text: string): number | null {
   return Number.isFinite(n) && n >= 0 && n <= 1 ? n : null
 }
 
+function validateFallback(d: RoutingDraft, publicModel: string): RoutingError[] {
+  const errs: RoutingError[] = []
+  const n = d.fallbackCandidates.length
+  if (n < 1 || n > MAX_FALLBACK_CANDIDATES) errs.push({ code: 'fallback-count' })
+  d.fallbackCandidates.forEach((c, index) => {
+    if (c.model === '' || byteLength(c.model) > MAX_MODEL_NAME_LEN) {
+      errs.push({ code: 'candidate-model', index })
+    } else if (c.model === publicModel) {
+      errs.push({ code: 'fallback-model-public', index })
+    }
+    // Criteria are optional for a fallback: only the size bound applies.
+    if (byteLength(c.criteria) > MAX_CRITERIA_BYTES) {
+      errs.push({ code: 'criteria-too-long', index })
+    }
+  })
+  return errs
+}
+
 export function validateDraft(
   d: RoutingDraft,
   publicModel: string
 ): RoutingError[] {
+  if (d.strategy === 'fallback') return validateFallback(d, publicModel)
   const errs: RoutingError[] = []
   if (parseConfidence(d.minConfidence) === null) {
     errs.push({ code: 'min-confidence' })
@@ -173,7 +233,21 @@ export function validateDraft(
 
 /** Request body of PUT /routing-policies/:model. Call only after validateDraft is clean. */
 export function toRequestBody(d: RoutingDraft) {
+  if (d.strategy === 'fallback') {
+    // The server ignores evaluator/instructions/confidence/default for a
+    // fallback; leave them out rather than send stale decision values.
+    return {
+      strategy: 'fallback' as const,
+      enabled: d.enabled,
+      candidates: d.fallbackCandidates.map((c) => ({
+        id: c.id,
+        model: c.model,
+        criteria: c.criteria,
+      })),
+    }
+  }
   return {
+    strategy: 'decision' as const,
     enabled: d.enabled,
     evaluator_model: d.evaluatorModel.trim(),
     instructions: d.instructions,
