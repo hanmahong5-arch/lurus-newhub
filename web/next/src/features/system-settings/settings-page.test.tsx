@@ -139,14 +139,14 @@ function installApi(options: {
         const payload = options.onFetch?.(config.data) ?? SYNC_RESULT
         return reply(200, { success: true, data: payload })
       }
-      if (config.url === '/api/option/' && config.method === 'GET') {
+      if (config.url === '/api/v2/admin/options' && config.method === 'GET') {
         if (options.listStatus && options.listStatus >= 400) {
           // What the response interceptor turns a 4xx into.
           throw new ApiError('root only', { status: options.listStatus })
         }
         return reply(200, { success: true, data: options.list ?? BASE_OPTIONS })
       }
-      if (config.url === '/api/option/' && config.method === 'PUT') {
+      if (config.url === '/api/v2/admin/options' && config.method === 'PUT') {
         const body = config.data as { key: string; value: unknown }
         puts.push(body)
         const out = options.onPut?.(body) ?? {

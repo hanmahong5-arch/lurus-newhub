@@ -93,20 +93,12 @@ func toOpenAIEmbeddingResponse(resp *schemas.BifrostEmbeddingResponse, model str
 			Index:  d.Index,
 		}
 		if len(d.Embedding.EmbeddingArray) > 0 {
-			item.Embedding = dto.RawEmbedding(float32To64(d.Embedding.EmbeddingArray))
+			item.Embedding = dto.RawEmbedding(d.Embedding.EmbeddingArray)
 		}
 		out.Data = append(out.Data, item)
 	}
 	if usage := fromBifrostUsage(resp.Usage); usage != nil {
 		out.Usage = *usage
-	}
-	return out
-}
-
-func float32To64(in []float32) []float64 {
-	out := make([]float64, len(in))
-	for i, v := range in {
-		out[i] = float64(v)
 	}
 	return out
 }

@@ -95,13 +95,13 @@ func toBifrostMessages(msgs []dto.Message) ([]schemas.ChatMessage, error) {
 				if cm.ChatAssistantMessage == nil {
 					cm.ChatAssistantMessage = &schemas.ChatAssistantMessage{}
 				}
-				cm.ChatAssistantMessage.Reasoning = &r
+				cm.Reasoning = &r
 			} else if m.Reasoning != "" {
 				r := m.Reasoning
 				if cm.ChatAssistantMessage == nil {
 					cm.ChatAssistantMessage = &schemas.ChatAssistantMessage{}
 				}
-				cm.ChatAssistantMessage.Reasoning = &r
+				cm.Reasoning = &r
 			}
 		}
 
@@ -407,7 +407,8 @@ func fromBifrostUsage(u *schemas.BifrostLLMUsage) *dto.Usage {
 	}
 	if u.PromptTokensDetails != nil {
 		out.PromptTokensDetails = dto.InputTokenDetails{
-			CachedTokens: u.PromptTokensDetails.CachedTokens,
+			// Bifrost splits cache into read/write; OpenAI wire is a single cached_tokens.
+			CachedTokens: u.PromptTokensDetails.CachedReadTokens + u.PromptTokensDetails.CachedWriteTokens,
 			AudioTokens:  u.PromptTokensDetails.AudioTokens,
 			ImageTokens:  u.PromptTokensDetails.ImageTokens,
 			TextTokens:   u.PromptTokensDetails.TextTokens,
@@ -482,18 +483,18 @@ func toOpenAITextResponse(resp *schemas.BifrostChatResponse, model string) *dto.
 		if ch.FinishReason != nil {
 			choice.FinishReason = *ch.FinishReason
 		}
-		if ch.ChatNonStreamResponseChoice != nil && ch.ChatNonStreamResponseChoice.Message != nil {
-			msg := ch.ChatNonStreamResponseChoice.Message
+		if ch.ChatNonStreamResponseChoice != nil && ch.Message != nil {
+			msg := ch.Message
 			choice.Message = dto.Message{
 				Role:    string(msg.Role),
 				Content: bifrostMessageText(msg),
 			}
 			if msg.ChatAssistantMessage != nil {
-				if toolCalls := fromAssistantToolCalls(msg.ChatAssistantMessage.ToolCalls); len(toolCalls) > 0 {
-					choice.Message.SetToolCalls(toolCalls)
+				if toolCalls := fromAssistantToolCalls(msg.ToolCalls); len(toolCalls) > 0 {
+					choice.SetToolCalls(toolCalls)
 				}
-				if msg.ChatAssistantMessage.Reasoning != nil {
-					choice.Message.ReasoningContent = *msg.ChatAssistantMessage.Reasoning
+				if msg.Reasoning != nil {
+					choice.ReasoningContent = *msg.Reasoning
 				}
 			}
 		}
@@ -525,8 +526,8 @@ func toStreamChunk(resp *schemas.BifrostChatResponse, model string) *dto.ChatCom
 			Index:        ch.Index,
 			FinishReason: ch.FinishReason,
 		}
-		if ch.ChatStreamResponseChoice != nil && ch.ChatStreamResponseChoice.Delta != nil {
-			d := ch.ChatStreamResponseChoice.Delta
+		if ch.ChatStreamResponseChoice != nil && ch.Delta != nil {
+			d := ch.Delta
 			delta := dto.ChatCompletionsStreamResponseChoiceDelta{
 				Content:   d.Content,
 				Reasoning: d.Reasoning,

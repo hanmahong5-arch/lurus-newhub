@@ -112,6 +112,11 @@ var noConsoleConsumer = map[string]string{
 	// the substring alone.) Kept as a v1 API surface for scripted clients.
 	"GET /api/token/": "superseded in the console by the v2 tenant-scoped " +
 		"tokens endpoints (features/keys); kept as a v1 API surface for scripted clients",
+	// V1 account settings write. Console account feature writes
+	// PUT /api/v2/account/setting (features/account/api.ts); the v1 route
+	// stays registered for scripted clients during deprecation Phase 1.
+	"PUT /api/user/setting": "superseded in the console by PUT /api/v2/account/setting; " +
+		"kept as a v1 API surface for scripted clients during REST /api deprecation Phase 1",
 }
 
 // consumedBy reports whether some URL in corpus (one per line) contains needle

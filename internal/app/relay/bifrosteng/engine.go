@@ -28,9 +28,10 @@ func Init(ctx context.Context) error {
 		return nil
 	}
 	account = NewChannelAccount()
+	// No LLMPlugins: newhub PostConsumeQuota remains the billing ledger.
+	// Bifrost budget/virtual-key must never become a second source of truth.
 	c, err := bifrost.Init(ctx, schemas.BifrostConfig{
 		Account: account,
-		Plugins: []schemas.Plugin{&billingPlugin{}},
 	})
 	if err != nil {
 		account = nil

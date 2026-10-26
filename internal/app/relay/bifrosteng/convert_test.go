@@ -56,10 +56,10 @@ func TestToBifrostMessages_MultimodalAndTools(t *testing.T) {
 	if msgs[0].Content.ContentBlocks[1].ImageURLStruct == nil || msgs[0].Content.ContentBlocks[1].ImageURLStruct.URL == "" {
 		t.Fatalf("image block=%+v", msgs[0].Content.ContentBlocks[1])
 	}
-	if msgs[1].ChatAssistantMessage == nil || len(msgs[1].ChatAssistantMessage.ToolCalls) != 1 {
+	if msgs[1].ChatAssistantMessage == nil || len(msgs[1].ToolCalls) != 1 {
 		t.Fatalf("assistant tool_calls=%v", msgs[1].ChatAssistantMessage)
 	}
-	if msgs[2].ChatToolMessage == nil || msgs[2].ChatToolMessage.ToolCallID == nil || *msgs[2].ChatToolMessage.ToolCallID != "call_1" {
+	if msgs[2].ChatToolMessage == nil || msgs[2].ToolCallID == nil || *msgs[2].ToolCallID != "call_1" {
 		t.Fatalf("tool msg=%v", msgs[2].ChatToolMessage)
 	}
 }
@@ -102,7 +102,8 @@ func TestFromBifrostUsage(t *testing.T) {
 		CompletionTokens: 5,
 		TotalTokens:      15,
 		PromptTokensDetails: &schemas.ChatPromptTokensDetails{
-			CachedTokens: 3,
+			CachedReadTokens:  2,
+			CachedWriteTokens: 1,
 		},
 	})
 	if u.PromptTokens != 10 || u.CompletionTokens != 5 || u.TotalTokens != 15 {
@@ -154,7 +155,7 @@ func TestToOpenAITextResponse_WithToolCalls(t *testing.T) {
 	if out.Id != "chatcmpl-1" || len(out.Choices) != 1 {
 		t.Fatalf("out=%+v", out)
 	}
-	calls := out.Choices[0].Message.ParseToolCalls()
+	calls := out.Choices[0].ParseToolCalls()
 	if len(calls) != 1 || calls[0].Function.Name != "lookup" {
 		t.Fatalf("tool_calls=%+v", calls)
 	}
