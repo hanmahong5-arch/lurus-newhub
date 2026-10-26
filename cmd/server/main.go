@@ -23,6 +23,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/app/openrouter_pool"
 	openrouter_sync "github.com/LurusTech/lurus-hub/internal/app/openrouter_sync"
 	"github.com/LurusTech/lurus-hub/internal/app/planquota"
+	"github.com/LurusTech/lurus-hub/internal/app/relay/bifrosteng"
 	"github.com/LurusTech/lurus-hub/internal/app/sedimentation"
 	"github.com/LurusTech/lurus-hub/internal/lifecycle"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
@@ -119,6 +120,18 @@ func run(ctx context.Context, startTime time.Time) error {
 	}
 
 	common.SysLog("New API " + common.Version + " started")
+
+	// Bifrost relay engine (RELAY_ENGINE=bifrost). Default legacy = no Init.
+	if err := bifrosteng.Init(ctx); err != nil {
+		return fmt.Errorf("bifrosteng init: %w", err)
+	}
+	defer bifrosteng.Shutdown()
+	if bifrosteng.Enabled() {
+		common.SysLog("relay engine: bifrost (modes=" + os.Getenv("RELAY_BIFROST_MODES") + ")")
+	} else {
+		common.SysLog("relay engine: legacy")
+	}
+
 	if os.Getenv("GIN_MODE") != "debug" {
 		gin.SetMode(gin.ReleaseMode)
 	}

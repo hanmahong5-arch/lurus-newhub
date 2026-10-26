@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { api, http, tenantApi, tenantUrl } from '@/lib/api'
+import { http, tenantApi, tenantUrl } from '@/lib/api'
 
 import type {
   AccountProfile,
@@ -38,33 +38,33 @@ export function fetchProfile(): Promise<AccountProfile> {
   return tenantApi.get<AccountProfile>('/user/me')
 }
 
-/** v1 handler: answers HTTP 200 {success:false} on validation failure. */
+/** Answers HTTP 200 {success:false} on validation failure (same handler as v1). */
 export async function saveUserSettings(
   body: UpdateUserSettingBody
 ): Promise<void> {
-  await api.put<unknown>('/api/user/setting', body)
+  await tenantApi.put<unknown>('/user/setting', body)
 }
 
 export function fetchTotpStatus(): Promise<TotpStatus> {
-  return api.get<TotpStatus>('/api/user/totp/status')
+  return tenantApi.get<TotpStatus>('/user/totp/status')
 }
 
 export function enrollTotp(): Promise<TotpEnrollment> {
-  return api.post<TotpEnrollment>('/api/user/totp/enroll')
+  return tenantApi.post<TotpEnrollment>('/user/totp/enroll')
 }
 
 export function confirmTotp(code: string): Promise<BackupCodes> {
-  return api.post<BackupCodes>('/api/user/totp/confirm', { code })
+  return tenantApi.post<BackupCodes>('/user/totp/confirm', { code })
 }
 
 /** Behind middleware.SecureVerificationRequired: call through useStepUp().run. */
 export function regenerateBackupCodes(): Promise<BackupCodes> {
-  return api.post<BackupCodes>('/api/user/totp/backup-codes/regenerate')
+  return tenantApi.post<BackupCodes>('/user/totp/backup-codes/regenerate')
 }
 
 /** Behind middleware.SecureVerificationRequired: call through useStepUp().run. */
 export async function disableTotp(): Promise<void> {
-  await api.post<unknown>('/api/user/totp/disable')
+  await tenantApi.post<unknown>('/user/totp/disable')
 }
 
 function num(v: unknown): number | undefined {

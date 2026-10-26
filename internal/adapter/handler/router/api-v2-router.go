@@ -481,6 +481,14 @@ func SetApiV2Router(router *gin.Engine) {
 
 		// Settings — PUT for profile update (GET already registered above)
 		apiV2.PUT("/:tenant_slug/user/me", middleware.UserAuth(), middleware.TenantSlugGuard(), handler.UpdateSelfV2)
+		// User setting + TOTP (v1 /api/user/* equivalents; same handlers).
+		// Part of REST v1 deprecation: console account page moves here.
+		apiV2.PUT("/:tenant_slug/user/setting", middleware.UserAuth(), middleware.TenantSlugGuard(), handler.UpdateUserSetting)
+		apiV2.GET("/:tenant_slug/user/totp/status", middleware.UserAuth(), middleware.TenantSlugGuard(), handler.GetTotpStatus)
+		apiV2.POST("/:tenant_slug/user/totp/enroll", middleware.UserAuth(), middleware.TenantSlugGuard(), middleware.CriticalRateLimit(), handler.TotpEnroll)
+		apiV2.POST("/:tenant_slug/user/totp/confirm", middleware.UserAuth(), middleware.TenantSlugGuard(), middleware.CriticalRateLimit(), handler.TotpConfirm)
+		apiV2.POST("/:tenant_slug/user/totp/disable", middleware.UserAuth(), middleware.TenantSlugGuard(), middleware.CriticalRateLimit(), middleware.SecureVerificationRequired(), handler.TotpDisable)
+		apiV2.POST("/:tenant_slug/user/totp/backup-codes/regenerate", middleware.UserAuth(), middleware.TenantSlugGuard(), middleware.TotpBackupCodesRateLimit(), middleware.SecureVerificationRequired(), handler.RegenerateTotpBackupCodes)
 
 		// ================================================================
 		// Switch Public Routes (no authentication required)
@@ -707,6 +715,9 @@ func SetApiV2Router(router *gin.Engine) {
 			// Live routing health: per-channel circuit-breaker state as this
 			// replica sees it. Read-only and side-effect free.
 			adminRoute.GET("/gateway/health", handler.GetGatewayHealthV2)
+			// Relay engine flag + in-process Bifrost/legacy dispatch counters
+			// (same honesty contract as /gateway/health: per-replica).
+			adminRoute.GET("/gateway/relay-engine", handler.GetRelayEngineV2)
 
 			// Session-affinity stats + purge (L5, routing-resilience-limits-11 /
 			// console-ux-30). Two DELETE shapes on purpose: a bare

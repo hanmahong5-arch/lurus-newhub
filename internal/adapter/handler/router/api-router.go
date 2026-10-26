@@ -12,6 +12,10 @@ func SetApiRouter(router *gin.Engine) {
 	apiRouter := router.Group("/api")
 	apiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
 	apiRouter.Use(middleware.CORS())
+	// Phase 1 of doc/decisions/v1-deprecation.md: Deprecation + Sunset headers
+	// and a usage counter. Public boot surfaces (status/notice/…) are exempt.
+	// Relay OpenAI /v1/* is on SetRelayRouter — never this group.
+	apiRouter.Use(middleware.V1DeprecationHeaders())
 	// Cycle-12 L4: CSRF origin guard — same placement and carve-outs as
 	// api-v2-router.go's. v1 relay and service callers present a credential
 	// header and are skipped; the console's cookie-authenticated writes are the

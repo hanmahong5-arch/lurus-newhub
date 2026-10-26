@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
+	"github.com/LurusTech/lurus-hub/internal/app/relay/bifrosteng"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/resilience"
 
@@ -72,5 +73,22 @@ func GetGatewayHealthV2(c *gin.Context) {
 			"replica_scoped":  true,
 			"lazy_registered": true,
 		},
+	})
+}
+
+// GetRelayEngineV2 reports this replica's Bifrost/legacy relay-engine flag and
+// in-process dispatch counters for the admin console.
+//
+// Honesty caveats (mirrored on ops surfaces that consume this):
+//   - Config + counters are per-replica; a multi-replica NodePort shows one pod.
+//   - totals count since process start, not a durable warehouse — Prometheus
+//     /metrics remains the long-window source.
+//   - engine=legacy with ready=false is the default healthy posture, not an error.
+//
+// GET /api/v2/admin/gateway/relay-engine — root only (RootJWTAuth on the group).
+func GetRelayEngineV2(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    bifrosteng.Snapshot(),
 	})
 }

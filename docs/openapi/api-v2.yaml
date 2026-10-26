@@ -1,4 +1,4 @@
-openapi: 3.0.3
+﻿openapi: 3.0.3
 info:
   title: Lurus API V2 - Multi-Tenant Gateway
   description: |
@@ -55,6 +55,8 @@ servers:
     description: Local development
 
 tags:
+  - name: Switch
+    description: White-label Switch client surfaces
   - name: OAuth
     description: OAuth 2.0 / OpenID Connect authentication flows
   - name: User
@@ -3521,6 +3523,92 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /api/v2/{tenant_slug}/switch/teampack/meta:
+    get:
+      tags:
+        - Switch
+      summary: Teampack metadata
+      operationId: getSwitchTeamPackMeta
+      parameters:
+        - name: tenant_slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Teampack meta
+        '404':
+          description: No teampack published
+  /api/v2/{tenant_slug}/switch/teampack:
+    get:
+      tags:
+        - Switch
+      summary: Teampack blob
+      operationId: getSwitchTeamPackBlob
+      parameters:
+        - name: tenant_slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: application/gzip bytes
+        '404':
+          description: No teampack published
+  /api/v2/{tenant_slug}/switch/teampack.sig:
+    get:
+      tags:
+        - Switch
+      summary: Teampack signature
+      operationId: getSwitchTeamPackSig
+      parameters:
+        - name: tenant_slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: text/plain signature
+        '404':
+          description: No teampack published
+  /api/v2/admin/tenants/{id}/switch-teampack:
+    put:
+      tags:
+        - Platform Admin
+      summary: Publish Switch teampack
+      operationId: putSwitchTeamPack
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Published meta
+        '400':
+          description: Validation failure
+        '404':
+          description: Tenant not found
+    delete:
+      tags:
+        - Platform Admin
+      summary: Delete Switch teampack
+      operationId: deleteSwitchTeamPack
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Deleted
+        '404':
+          description: Tenant or teampack not found
 components:
   securitySchemes:
     OIDCBearer:

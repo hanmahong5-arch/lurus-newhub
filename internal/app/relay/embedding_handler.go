@@ -11,6 +11,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/model_setting"
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
+	"github.com/LurusTech/lurus-hub/internal/app/relay/bifrosteng"
 	"github.com/LurusTech/lurus-hub/internal/app/relay/helper"
 	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
@@ -35,6 +36,16 @@ func EmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
+
+	if bifrosteng.ShouldHandleEmbeddings(info.ApiType) {
+		usage, bifrostErr := bifrosteng.DispatchEmbedding(c, info, request)
+		if bifrostErr != nil {
+			return bifrostErr
+		}
+		postConsumeQuota(c, info, usage)
+		return nil
+	}
+	bifrosteng.ObserveEngine(bifrosteng.EngineLegacy, bifrosteng.ModeEmbeddings, "ok")
 
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {

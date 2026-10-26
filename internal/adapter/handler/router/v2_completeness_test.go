@@ -238,6 +238,15 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"PUT /api/v2/:tenant_slug/data-policy/retention":       "PutContentRetentionV2 writes the caller's own tenant (tenantSelectionScope), no addressable id",
 		"PUT /api/v2/:tenant_slug/data-policy/sedimentation":   "PutSedimentationConsentV2 writes the caller's own tenant (tenantSelectionScope), no addressable id",
 		"GET /api/v2/admin/logs/:request_id/body":              "RootJWTAuth-gated platform-staff read of an archived body across tenants by design (audited, 404 on miss)",
+
+		// Account TOTP + settings (v1 → v2 migration). Handlers read the
+		// session user id only — TenantSlugGuard binds the slug; there is no
+		// addressable foreign user/tenant resource id to IDOR against.
+		"PUT /api/v2/:tenant_slug/user/setting":                     "UpdateUserSetting writes the session user only; TenantSlugGuard confines the slug; no foreign user id in the path",
+		"POST /api/v2/:tenant_slug/user/totp/enroll":                "TotpEnroll mutates the session user's enrollment only; TenantSlugGuard confines the slug",
+		"POST /api/v2/:tenant_slug/user/totp/confirm":               "TotpConfirm mutates the session user's enrollment only; TenantSlugGuard confines the slug",
+		"POST /api/v2/:tenant_slug/user/totp/disable":               "TotpDisable mutates the session user's enrollment only; SecureVerificationRequired + TenantSlugGuard",
+		"POST /api/v2/:tenant_slug/user/totp/backup-codes/regenerate": "RegenerateTotpBackupCodes mutates the session user's codes only; SecureVerificationRequired + TenantSlugGuard",
 	}
 
 	isMutation := func(m string) bool {

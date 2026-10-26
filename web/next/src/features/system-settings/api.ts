@@ -30,14 +30,14 @@ export type SystemOption = {
 
 export type OptionValue = string | boolean | number
 
-/** GET /api/option/ - every readable option (root only). */
+/** GET /api/v2/admin/options - every readable option (root only). */
 export async function getSystemOptions(): Promise<SystemOption[]> {
-  const data = await api.get<SystemOption[] | null>('/api/option/')
+  const data = await api.get<SystemOption[] | null>('/api/v2/admin/options')
   return data ?? []
 }
 
 /**
- * PUT /api/option/ {key,value}. The server answers HTTP 200 with
+ * PUT /api/v2/admin/options {key,value}. The server answers HTTP 200 with
  * `success:false` for some refusals and 400 for others; `api.put` turns both
  * into an ApiError carrying the server's own message.
  */
@@ -45,7 +45,7 @@ export async function updateSystemOption(
   key: string,
   value: OptionValue
 ): Promise<void> {
-  await api.put<unknown>('/api/option/', { key, value })
+  await api.put<unknown>('/api/v2/admin/options', { key, value })
 }
 
 /** POST /api/option/rest_model_ratio - reset every model ratio to the defaults. */
