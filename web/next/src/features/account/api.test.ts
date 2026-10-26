@@ -48,6 +48,8 @@ const SETTINGS = {
 beforeEach(() => {
   request = vi.spyOn(http, 'request')
   del = vi.spyOn(http, 'delete')
+  request.mockReset()
+  del.mockReset()
 })
 
 describe('account api wire contract', () => {
@@ -81,12 +83,12 @@ describe('account api wire contract', () => {
     expect(list.items[0]).toMatchObject({ id: 2, current: true })
   })
 
-  it('posts the settings to the v1 route and unwraps a 200 failure', async () => {
+  it('posts the settings to the v2 tenant route and unwraps a 200 failure', async () => {
     reply({ success: true, message: '' })
     await saveUserSettings(SETTINGS)
     expect(request.mock.calls[0][0]).toMatchObject({
       method: 'PUT',
-      url: '/api/user/setting',
+      url: '/api/v2/~/user/setting',
     })
     reply({ success: false, message: 'invalid warning type' })
     await expect(saveUserSettings(SETTINGS)).rejects.toMatchObject({
@@ -98,19 +100,19 @@ describe('account api wire contract', () => {
     reply({ success: true, data: { backup_codes: ['a'] } })
     await confirmTotp('123456')
     expect(request.mock.calls[0][0]).toMatchObject({
-      url: '/api/user/totp/confirm',
+      url: '/api/v2/~/user/totp/confirm',
       data: { code: '123456' },
     })
     reply({ success: true, data: { backup_codes: ['b'] } })
     await regenerateBackupCodes()
     expect(request.mock.calls[1][0].url).toBe(
-      '/api/user/totp/backup-codes/regenerate'
+      '/api/v2/~/user/totp/backup-codes/regenerate'
     )
     reply({ success: true, message: '' })
     await disableTotp()
     expect(request.mock.calls[2][0]).toMatchObject({
       method: 'POST',
-      url: '/api/user/totp/disable',
+      url: '/api/v2/~/user/totp/disable',
     })
   })
 })

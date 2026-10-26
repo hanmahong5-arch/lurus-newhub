@@ -80,7 +80,7 @@ export type SaveGuard = {
 
 type OptionFormProps = {
   fields: OptionField[]
-  /** Raw option map; defaults to the shared /api/option/ query. */
+  /** Raw option map; defaults to the shared /api/v2/admin/options query. */
   map?: OptionMap
   /** Rendered under the fields (notes, danger zones). */
   children?: ReactNode

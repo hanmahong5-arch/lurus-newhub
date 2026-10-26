@@ -310,7 +310,7 @@ export function validateField(
   }
 }
 
-/** The typed value PUT /api/option/ receives for a validated draft. */
+/** The typed value PUT /api/v2/admin/options receives for a validated draft. */
 export function serializeField(field: OptionField, value: string): OptionValue {
   switch (field.kind) {
     case 'switch':

@@ -75,6 +75,10 @@
     {
       "name": "Status",
       "description": "Anonymous availability views"
+    },
+    {
+      "name": "Switch",
+      "description": "White-label Switch client surfaces (public teampack pull + related)"
     }
   ],
   "paths": {
@@ -6164,6 +6168,248 @@
           }
         }
       }
+    },
+    "/api/v2/{tenant_slug}/switch/teampack/meta": {
+      "get": {
+        "tags": [
+          "Switch"
+        ],
+        "summary": "Teampack metadata",
+        "description": "Public metadata for the reseller team-asset bundle. 404 when unpublished.",
+        "operationId": "getSwitchTeamPackMeta",
+        "parameters": [
+          {
+            "name": "tenant_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Tenant slug (or ~ for session tenant)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Teampack meta",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "version": {
+                          "type": "string"
+                        },
+                        "sha256": {
+                          "type": "string"
+                        },
+                        "size": {
+                          "type": "integer",
+                          "format": "int64"
+                        },
+                        "updated_at": {
+                          "type": "integer",
+                          "format": "int64"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No teampack published for this tenant"
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/switch/teampack": {
+      "get": {
+        "tags": [
+          "Switch"
+        ],
+        "summary": "Teampack blob",
+        "description": "Public download of the signed teampack.tar.gz. Excluded from response gzip.",
+        "operationId": "getSwitchTeamPackBlob",
+        "parameters": [
+          {
+            "name": "tenant_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Tenant slug (or ~ for session tenant)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "application/gzip bytes",
+            "content": {
+              "application/gzip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No teampack published"
+          }
+        }
+      }
+    },
+    "/api/v2/{tenant_slug}/switch/teampack.sig": {
+      "get": {
+        "tags": [
+          "Switch"
+        ],
+        "summary": "Teampack signature",
+        "description": "Public ed25519 signature hex for the teampack blob. Excluded from response gzip.",
+        "operationId": "getSwitchTeamPackSig",
+        "parameters": [
+          {
+            "name": "tenant_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Tenant slug (or ~ for session tenant)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/plain signature",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No teampack published"
+          }
+        }
+      }
+    },
+    "/api/v2/admin/tenants/{id}/switch-teampack": {
+      "put": {
+        "tags": [
+          "Platform Admin"
+        ],
+        "summary": "Publish Switch teampack",
+        "description": "Root-only upload of a signed teampack for one tenant.",
+        "operationId": "putSwitchTeamPack",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Tenant id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version",
+                  "blob_b64",
+                  "sig"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "string"
+                  },
+                  "blob_b64": {
+                    "type": "string",
+                    "description": "Base64-encoded teampack.tar.gz"
+                  },
+                  "sig": {
+                    "type": "string",
+                    "description": "128 hex chars ed25519 signature"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Published meta"
+          },
+          "400": {
+            "description": "Validation failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Tenant not found"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Platform Admin"
+        ],
+        "summary": "Delete Switch teampack",
+        "description": "Root-only removal of a tenant teampack.",
+        "operationId": "deleteSwitchTeamPack",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Tenant id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Tenant or teampack not found"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -6627,28 +6873,28 @@
           "weight": {
             "type": "integer"
           },
-        "plan_kind": {
-          "type": "string"
-        },
-        "expires_at": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "key_count": {
-          "type": "integer"
-        },
-        "enabled_key_count": {
-          "type": "integer"
-        },
-        "routable": {
-          "type": "boolean"
-        },
-        "unroutable_reasons": {
-          "type": "array",
-          "items": {
+          "plan_kind": {
             "type": "string"
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "key_count": {
+            "type": "integer"
+          },
+          "enabled_key_count": {
+            "type": "integer"
+          },
+          "routable": {
+            "type": "boolean"
+          },
+          "unroutable_reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
-        }
         }
       },
       "ChannelCreate": {
@@ -7118,12 +7364,28 @@
       "StatementRow": {
         "type": "object",
         "properties": {
-          "key": {"type": "string"},
-          "label": {"type": "string"},
-          "requests": {"type": "integer", "format": "int64"},
-          "quota": {"type": "integer", "format": "int64"},
-          "charged_cny4": {"type": "integer", "format": "int64"},
-          "priced_cny4": {"type": "integer", "format": "int64"}
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "requests": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "quota": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "charged_cny4": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "priced_cny4": {
+            "type": "integer",
+            "format": "int64"
+          }
         }
       },
       "InvoiceMonth": {
@@ -7572,162 +7834,162 @@
         }
       },
       "LogExportRow": {
-      "description": "One line of the tenant JSONL export. Same columns as the CSV plus id, request_id and channel_key_idx.",
-      "properties": {
-        "body": {
-          "$ref": "#/components/schemas/LogExportBody"
+        "description": "One line of the tenant JSONL export. Same columns as the CSV plus id, request_id and channel_key_idx.",
+        "properties": {
+          "body": {
+            "$ref": "#/components/schemas/LogExportBody"
+          },
+          "channel_key_idx": {
+            "description": "Upstream key index of a multi-key channel; null otherwise",
+            "nullable": true,
+            "type": "integer"
+          },
+          "charged_cny": {
+            "description": "CNY to 4 decimals; empty when nothing was recorded",
+            "type": "string"
+          },
+          "completion_tokens": {
+            "type": "integer"
+          },
+          "content": {
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "employee_ref": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "log_type": {
+            "type": "integer"
+          },
+          "model_name": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "integer"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "prompt_tokens": {
+            "type": "integer"
+          },
+          "quota": {
+            "type": "integer"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "token_id": {
+            "type": "integer"
+          },
+          "token_name": {
+            "type": "string"
+          }
         },
-        "channel_key_idx": {
-          "description": "Upstream key index of a multi-key channel; null otherwise",
-          "nullable": true,
-          "type": "integer"
-        },
-        "charged_cny": {
-          "description": "CNY to 4 decimals; empty when nothing was recorded",
-          "type": "string"
-        },
-        "completion_tokens": {
-          "type": "integer"
-        },
-        "content": {
-          "type": "string"
-        },
-        "created_at": {
-          "format": "date-time",
-          "type": "string"
-        },
-        "employee_ref": {
-          "type": "string"
-        },
-        "id": {
-          "type": "integer"
-        },
-        "ip": {
-          "type": "string"
-        },
-        "log_type": {
-          "type": "integer"
-        },
-        "model_name": {
-          "type": "string"
-        },
-        "project_id": {
-          "type": "integer"
-        },
-        "project_name": {
-          "type": "string"
-        },
-        "prompt_tokens": {
-          "type": "integer"
-        },
-        "quota": {
-          "type": "integer"
-        },
-        "request_id": {
-          "type": "string"
-        },
-        "token_id": {
-          "type": "integer"
-        },
-        "token_name": {
-          "type": "string"
-        }
+        "type": "object"
       },
-      "type": "object"
-    },
-    "AdminLogExportRow": {
-      "description": "One line of the platform JSONL export (content/other are never included).",
-      "properties": {
-        "body": {
-          "$ref": "#/components/schemas/LogExportBody"
+      "AdminLogExportRow": {
+        "description": "One line of the platform JSONL export (content/other are never included).",
+        "properties": {
+          "body": {
+            "$ref": "#/components/schemas/LogExportBody"
+          },
+          "channel_id": {
+            "type": "integer"
+          },
+          "channel_key_idx": {
+            "nullable": true,
+            "type": "integer"
+          },
+          "charged_cny": {
+            "type": "string"
+          },
+          "completion_tokens": {
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "is_stream": {
+            "type": "boolean"
+          },
+          "log_type": {
+            "type": "integer"
+          },
+          "model_name": {
+            "type": "string"
+          },
+          "prompt_tokens": {
+            "type": "integer"
+          },
+          "quota": {
+            "type": "integer"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "token_name": {
+            "type": "string"
+          },
+          "total_latency_ms": {
+            "type": "integer"
+          },
+          "upstream_model": {
+            "type": "string"
+          },
+          "use_time": {
+            "type": "integer"
+          },
+          "user_id": {
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          }
         },
-        "channel_id": {
-          "type": "integer"
-        },
-        "channel_key_idx": {
-          "nullable": true,
-          "type": "integer"
-        },
-        "charged_cny": {
-          "type": "string"
-        },
-        "completion_tokens": {
-          "type": "integer"
-        },
-        "created_at": {
-          "format": "date-time",
-          "type": "string"
-        },
-        "group": {
-          "type": "string"
-        },
-        "id": {
-          "type": "integer"
-        },
-        "ip": {
-          "type": "string"
-        },
-        "is_stream": {
-          "type": "boolean"
-        },
-        "log_type": {
-          "type": "integer"
-        },
-        "model_name": {
-          "type": "string"
-        },
-        "prompt_tokens": {
-          "type": "integer"
-        },
-        "quota": {
-          "type": "integer"
-        },
-        "request_id": {
-          "type": "string"
-        },
-        "tenant_id": {
-          "type": "string"
-        },
-        "token_name": {
-          "type": "string"
-        },
-        "total_latency_ms": {
-          "type": "integer"
-        },
-        "upstream_model": {
-          "type": "string"
-        },
-        "use_time": {
-          "type": "integer"
-        },
-        "user_id": {
-          "type": "integer"
-        },
-        "username": {
-          "type": "string"
-        }
+        "type": "object"
       },
-      "type": "object"
-    },
-    "LogExportBody": {
-      "description": "Archived body attached under include_body=true; absent when the row has none.",
-      "properties": {
-        "request_body": {
-          "type": "string"
+      "LogExportBody": {
+        "description": "Archived body attached under include_body=true; absent when the row has none.",
+        "properties": {
+          "request_body": {
+            "type": "string"
+          },
+          "response_captured": {
+            "type": "boolean"
+          },
+          "response_text": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
         },
-        "response_captured": {
-          "type": "boolean"
-        },
-        "response_text": {
-          "type": "string"
-        },
-        "truncated": {
-          "type": "boolean"
-        }
+        "type": "object"
       },
-      "type": "object"
-    },
-    "LogBody": {
+      "LogBody": {
         "type": "object",
         "properties": {
           "request_id": {
