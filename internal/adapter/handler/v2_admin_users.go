@@ -103,12 +103,10 @@ func GetAdminUserV2(c *gin.Context) {
 	})
 }
 
-// ListAdminGroupsV2 returns group-ratio table names for admin user filters.
-// Route: GET /api/v2/admin/groups
+// ListAdminGroupsV2 returns group-ratio table names for admin filters /
+// ops-channels pickers. Route: GET /api/v2/admin/groups (AdminJWTAuth).
+// Auth matches v1 GET /api/group/ (any platform admin), not root-only.
 func ListAdminGroupsV2(c *gin.Context) {
-	if _, ok := requireRoot(c); !ok {
-		return
-	}
 	GetGroups(c)
 }
 

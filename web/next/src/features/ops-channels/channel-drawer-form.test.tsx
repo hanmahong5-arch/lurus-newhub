@@ -79,11 +79,11 @@ const STORED = channelRow(1, {
 
 function setRoutes(extra: Record<string, Route> = {}) {
   routes = {
-    'GET /api/channel/': listBody([STORED]),
-    'GET /api/channel/1': { ...ok, data: STORED },
-    'GET /api/group/': { ...ok, data: ['default', 'vip'] },
-    'GET /api/channel/models_enabled': { ...ok, data: ['model-a', 'model-c'] },
-    'GET /api/prefill_group/': { ...ok, data: [] },
+    'GET /api/v2/admin/channels': listBody([STORED]),
+    'GET /api/v2/admin/channels/1': { ...ok, data: STORED },
+    'GET /api/v2/admin/groups': { ...ok, data: ['default', 'vip'] },
+    'GET /api/v2/admin/channels/models_enabled': { ...ok, data: ['model-a', 'model-c'] },
+    'GET /api/v2/admin/prefill-groups': { ...ok, data: [] },
     ...extra,
   }
 }
@@ -139,7 +139,7 @@ async function fillCreateForm(sheet: HTMLElement) {
 
 describe('create channel', () => {
   it('sends a single-key create with the form values', async () => {
-    setRoutes({ 'POST /api/channel/': ok })
+    setRoutes({ 'POST /api/v2/admin/channels': ok })
     const sheet = await openCreate()
     await pickProvider(sheet, /OpenAI #1/)
     await fillCreateForm(sheet)
@@ -148,8 +148,8 @@ describe('create channel', () => {
       within(sheet).getByRole('button', { name: 'Create Channel' })
     )
 
-    await waitFor(() => expect(calls('POST', '/api/channel/')).toHaveLength(1))
-    const body = calls('POST', '/api/channel/')[0]?.data as {
+    await waitFor(() => expect(calls('POST', '/api/v2/admin/channels')).toHaveLength(1))
+    const body = calls('POST', '/api/v2/admin/channels')[0]?.data as {
       mode: string
       channel: Record<string, unknown>
     }
@@ -169,7 +169,7 @@ describe('create channel', () => {
 
   it('keeps the drawer open and shows the server message when create fails', async () => {
     setRoutes({
-      'POST /api/channel/': { success: false, message: 'channel cannot be empty' },
+      'POST /api/v2/admin/channels': { success: false, message: 'channel cannot be empty' },
     })
     const sheet = await openCreate()
     await pickProvider(sheet, /OpenAI #1/)
@@ -197,7 +197,7 @@ describe('create channel', () => {
     expect(
       await within(sheet).findByText('Channel name is required')
     ).toBeInTheDocument()
-    expect(calls('POST', '/api/channel/')).toHaveLength(0)
+    expect(calls('POST', '/api/v2/admin/channels')).toHaveLength(0)
   })
 
   it('requires a base URL for types that cannot run without one', async () => {
@@ -222,11 +222,11 @@ describe('create channel', () => {
     expect(
       await within(sheet).findByText('Base URL is required for this channel type')
     ).toBeInTheDocument()
-    expect(calls('POST', '/api/channel/')).toHaveLength(0)
+    expect(calls('POST', '/api/v2/admin/channels')).toHaveLength(0)
   })
 
   it('asks before saving a redirect whose source model is not in the list', async () => {
-    setRoutes({ 'POST /api/channel/': ok })
+    setRoutes({ 'POST /api/v2/admin/channels': ok })
     const sheet = await openCreate()
     await pickProvider(sheet, /OpenAI #1/)
     await fillCreateForm(sheet)
@@ -248,14 +248,14 @@ describe('create channel', () => {
 
     const dialog = await screen.findByRole('alertdialog')
     expect(dialog).toHaveTextContent('ghost-model')
-    expect(calls('POST', '/api/channel/')).toHaveLength(0)
+    expect(calls('POST', '/api/v2/admin/channels')).toHaveLength(0)
 
     await userEvent.click(
       within(dialog).getByRole('button', { name: 'Add and submit' })
     )
 
-    await waitFor(() => expect(calls('POST', '/api/channel/')).toHaveLength(1))
-    const body = calls('POST', '/api/channel/')[0]?.data as {
+    await waitFor(() => expect(calls('POST', '/api/v2/admin/channels')).toHaveLength(1))
+    const body = calls('POST', '/api/v2/admin/channels')[0]?.data as {
       channel: { models: string; model_mapping: string }
     }
     expect(body.channel.models).toBe('model-a,ghost-model')
@@ -268,11 +268,11 @@ describe('create channel', () => {
 describe('model presets', () => {
   it('adds a preset group of models to the list', async () => {
     setRoutes({
-      'GET /api/prefill_group/': {
+      'GET /api/v2/admin/prefill-groups': {
         ...ok,
         data: [{ id: 1, name: 'Starter', items: '["model-p","model-q"]' }],
       },
-      'POST /api/channel/': ok,
+      'POST /api/v2/admin/channels': ok,
     })
     const sheet = await openCreate()
     await pickProvider(sheet, /OpenAI #1/)
@@ -289,8 +289,8 @@ describe('model presets', () => {
       within(sheet).getByRole('button', { name: /Create Channel/ })
     )
 
-    await waitFor(() => expect(calls('POST', '/api/channel/')).toHaveLength(1))
-    const body = calls('POST', '/api/channel/')[0]?.data as {
+    await waitFor(() => expect(calls('POST', '/api/v2/admin/channels')).toHaveLength(1))
+    const body = calls('POST', '/api/v2/admin/channels')[0]?.data as {
       channel: { models: string }
     }
     expect(body.channel.models).toBe('model-p,model-q')
@@ -299,7 +299,7 @@ describe('model presets', () => {
 
 describe('edit channel', () => {
   it('loads the stored record, omits a blank key and keeps unmanaged setting members', async () => {
-    setRoutes({ 'PUT /api/channel/': { ...ok, data: STORED } })
+    setRoutes({ 'PUT /api/v2/admin/channels': { ...ok, data: STORED } })
     renderWithClient(<OpsChannelsPage />)
     await screen.findByText('alpha')
     await userEvent.click(screen.getByRole('button', { name: 'Edit' }))
@@ -312,8 +312,8 @@ describe('edit channel', () => {
       within(sheet).getByRole('button', { name: 'Update Channel' })
     )
 
-    await waitFor(() => expect(calls('PUT', '/api/channel/')).toHaveLength(1))
-    const body = calls('PUT', '/api/channel/')[0]?.data as Record<
+    await waitFor(() => expect(calls('PUT', '/api/v2/admin/channels')).toHaveLength(1))
+    const body = calls('PUT', '/api/v2/admin/channels')[0]?.data as Record<
       string,
       unknown
     >
@@ -337,7 +337,7 @@ describe('edit channel', () => {
 
   it('shows the server refusal and does not close', async () => {
     setRoutes({
-      'PUT /api/channel/': new ApiError('insufficient permission', {
+      'PUT /api/v2/admin/channels': new ApiError('insufficient permission', {
         status: 403,
       }),
     })
@@ -358,7 +358,7 @@ describe('edit channel', () => {
 
   it('shows an error state when the stored record cannot be loaded', async () => {
     setRoutes({
-      'GET /api/channel/1': new ApiError('gone', { status: 500 }),
+      'GET /api/v2/admin/channels/1': new ApiError('gone', { status: 500 }),
     })
     renderWithClient(<OpsChannelsPage />)
     await screen.findByText('alpha')
@@ -370,7 +370,7 @@ describe('edit channel', () => {
 
   it('reveals the stored key for the operator', async () => {
     setRoutes({
-      'POST /api/channel/1/key': { ...ok, data: { key: 'sk-stored-secret' } },
+      'POST /api/v2/admin/channels/1/key': { ...ok, data: { key: 'sk-stored-secret' } },
     })
     renderWithClient(<OpsChannelsPage />)
     await screen.findByText('alpha')
@@ -391,7 +391,7 @@ describe('edit channel', () => {
 describe('fetch upstream models', () => {
   it('fetches with the unsaved base URL, type and key, then fills the list', async () => {
     setRoutes({
-      'POST /api/channel/fetch_models': {
+      'POST /api/v2/admin/channels/fetch_models': {
         ...ok,
         data: ['model-a', 'model-x', 'model-y'],
       },
@@ -408,9 +408,9 @@ describe('fetch upstream models', () => {
     )
 
     await waitFor(() =>
-      expect(calls('POST', '/api/channel/fetch_models')).toHaveLength(1)
+      expect(calls('POST', '/api/v2/admin/channels/fetch_models')).toHaveLength(1)
     )
-    expect(calls('POST', '/api/channel/fetch_models')[0]?.data).toEqual({
+    expect(calls('POST', '/api/v2/admin/channels/fetch_models')[0]?.data).toEqual({
       base_url: '',
       type: 1,
       key: 'sk-fetch',

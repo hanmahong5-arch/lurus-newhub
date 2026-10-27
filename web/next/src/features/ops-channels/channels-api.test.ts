@@ -21,15 +21,15 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('v1 channel requests', () => {
-  it('lists with the trailing-slash path and returns the envelope untouched', async () => {
+describe('admin channels v2 requests', () => {
+  it('lists without a trailing slash and returns the envelope untouched', async () => {
     request.mockResolvedValue({
       data: { success: false, message: 'denied' },
     })
     const res = await getChannels({ p: 2, page_size: 10, tag_mode: true })
     expect(request).toHaveBeenCalledWith({
       method: 'GET',
-      url: '/api/channel/',
+      url: '/api/v2/admin/channels',
       params: { p: 2, page_size: 10, tag_mode: true },
     })
     // A 200 with success:false is the caller's to inspect, not swallowed.
@@ -41,7 +41,7 @@ describe('v1 channel requests', () => {
     await updateChannelStatus(5, 2)
     expect(request).toHaveBeenCalledWith({
       method: 'PUT',
-      url: '/api/channel/',
+      url: '/api/v2/admin/channels',
       data: { id: 5, status: 2 },
     })
   })
@@ -51,7 +51,7 @@ describe('v1 channel requests', () => {
     await copyChannel(4, { suffix: '_x', reset_balance: false })
     expect(request).toHaveBeenCalledWith({
       method: 'POST',
-      url: '/api/channel/copy/4',
+      url: '/api/v2/admin/channels/copy/4',
       params: { suffix: '_x', reset_balance: false },
     })
   })

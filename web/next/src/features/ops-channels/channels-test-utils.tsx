@@ -22,7 +22,7 @@ import type { ReactElement } from 'react'
 
 import type { Channel } from './types'
 
-/** A v1 channel row as GET /api/channel/ returns it (key column omitted). */
+/** A v1 channel row as GET /api/v2/admin/channels/ returns it (key column omitted). */
 export function channelRow(
   id: number,
   over: Partial<Channel> & Record<string, unknown> = {}

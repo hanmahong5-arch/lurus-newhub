@@ -188,7 +188,7 @@ export interface ImportRequest {
 }
 
 // ============================================================================
-// v1 channel management (GET/POST/PUT /api/channel...). The row is the raw
+// v1 channel management (GET/POST/PUT /api/v2/admin/channels...). The row is the raw
 // channel record with the key column omitted by the server.
 // ============================================================================
 

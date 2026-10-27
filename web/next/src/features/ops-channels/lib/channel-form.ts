@@ -432,7 +432,7 @@ function sharedPayload(
   }
 }
 
-/** Body of POST /api/channel/ for a new channel (or channels, in batch mode). */
+/** Body of POST /api/v2/admin/channels/ for a new channel (or channels, in batch mode). */
 export function transformFormDataToCreatePayload(
   values: ChannelFormValues
 ): AddChannelRequest {
@@ -457,7 +457,7 @@ export function transformFormDataToCreatePayload(
 }
 
 /**
- * Body of PUT /api/channel/ for an edit. A blank key is omitted (the server
+ * Body of PUT /api/v2/admin/channels/ for an edit. A blank key is omitted (the server
  * keeps the stored one); multi-key channels also send the key mode and the
  * polling mode.
  */

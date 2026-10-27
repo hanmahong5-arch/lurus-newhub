@@ -74,12 +74,12 @@ const ok = { success: true, message: '' }
 
 function setRoutes(extra: Record<string, Route> = {}) {
   routes = {
-    'GET /api/channel/': listBody([
+    'GET /api/v2/admin/channels': listBody([
       channelRow(1, { name: 'alpha' }),
       channelRow(2, { name: 'beta' }),
     ]),
-    'GET /api/group/': { ...ok, data: ['default'] },
-    'GET /api/channel/models': { ...ok, data: [{ id: 'model-a' }] },
+    'GET /api/v2/admin/groups': { ...ok, data: ['default'] },
+    'GET /api/v2/admin/channels/models': { ...ok, data: [{ id: 'model-a' }] },
     ...extra,
   }
 }
@@ -115,15 +115,15 @@ async function enterBatchMode() {
 
 describe('batch operations', () => {
   it('enables every selected channel with one partial update each', async () => {
-    setRoutes({ 'PUT /api/channel/': { ...ok, data: {} } })
+    setRoutes({ 'PUT /api/v2/admin/channels': { ...ok, data: {} } })
     await enterBatchMode()
 
     await userEvent.click(
       await screen.findByRole('button', { name: 'Enable selected channels' })
     )
 
-    await waitFor(() => expect(calls('PUT', '/api/channel/')).toHaveLength(2))
-    expect(calls('PUT', '/api/channel/').map((c) => c.data)).toEqual([
+    await waitFor(() => expect(calls('PUT', '/api/v2/admin/channels')).toHaveLength(2))
+    expect(calls('PUT', '/api/v2/admin/channels').map((c) => c.data)).toEqual([
       { id: 1, status: 1 },
       { id: 2, status: 1 },
     ])
@@ -134,7 +134,7 @@ describe('batch operations', () => {
 
   it('reports a total failure instead of success', async () => {
     setRoutes({
-      'PUT /api/channel/': { success: false, message: 'update refused' },
+      'PUT /api/v2/admin/channels': { success: false, message: 'update refused' },
     })
     await enterBatchMode()
 
@@ -149,7 +149,7 @@ describe('batch operations', () => {
   it('reports how many succeeded when only some do', async () => {
     let first = true
     setRoutes({
-      'PUT /api/channel/': () => {
+      'PUT /api/v2/admin/channels': () => {
         const body = first
           ? { ...ok, data: {} }
           : { success: false, message: 'second failed' }
@@ -172,24 +172,24 @@ describe('batch operations', () => {
   })
 
   it('deletes the selected ids after confirmation', async () => {
-    setRoutes({ 'POST /api/channel/batch': { ...ok, data: 2 } })
+    setRoutes({ 'POST /api/v2/admin/channels/batch': { ...ok, data: 2 } })
     await enterBatchMode()
 
     await userEvent.click(
       await screen.findByRole('button', { name: 'Delete selected channels' })
     )
     const dialog = await screen.findByRole('dialog')
-    expect(calls('POST', '/api/channel/batch')).toHaveLength(0)
+    expect(calls('POST', '/api/v2/admin/channels/batch')).toHaveLength(0)
     await userEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
 
     await waitFor(() =>
-      expect(calls('POST', '/api/channel/batch')).toHaveLength(1)
+      expect(calls('POST', '/api/v2/admin/channels/batch')).toHaveLength(1)
     )
-    expect(calls('POST', '/api/channel/batch')[0]?.data).toEqual({ ids: [1, 2] })
+    expect(calls('POST', '/api/v2/admin/channels/batch')[0]?.data).toEqual({ ids: [1, 2] })
   })
 
   it('sets a tag on the selected channels', async () => {
-    setRoutes({ 'POST /api/channel/batch/tag': { ...ok, data: 2 } })
+    setRoutes({ 'POST /api/v2/admin/channels/batch/tag': { ...ok, data: 2 } })
     await enterBatchMode()
 
     await userEvent.click(
@@ -200,9 +200,9 @@ describe('batch operations', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Set Tag' }))
 
     await waitFor(() =>
-      expect(calls('POST', '/api/channel/batch/tag')).toHaveLength(1)
+      expect(calls('POST', '/api/v2/admin/channels/batch/tag')).toHaveLength(1)
     )
-    expect(calls('POST', '/api/channel/batch/tag')[0]?.data).toEqual({
+    expect(calls('POST', '/api/v2/admin/channels/batch/tag')[0]?.data).toEqual({
       ids: [1, 2],
       tag: 'blue',
     })
@@ -213,7 +213,7 @@ describe('tag mode', () => {
   it('asks the server for tag pages and groups the rows under their tag', async () => {
     window.localStorage.setItem('enable-tag-mode', 'true')
     setRoutes({
-      'GET /api/channel/': listBody([
+      'GET /api/v2/admin/channels': listBody([
         channelRow(1, { name: 'alpha', tag: 'blue', priority: 5 }),
         channelRow(2, { name: 'beta', tag: 'blue', priority: 5 }),
       ]),
@@ -222,7 +222,7 @@ describe('tag mode', () => {
 
     expect(await screen.findByText(/Tag: blue/)).toBeInTheDocument()
     expect(screen.getByText('2 channels')).toBeInTheDocument()
-    expect(calls('GET', '/api/channel/')[0]?.params).toMatchObject({
+    expect(calls('GET', '/api/v2/admin/channels')[0]?.params).toMatchObject({
       tag_mode: true,
     })
     // children are collapsed until the tag row is expanded
@@ -232,10 +232,10 @@ describe('tag mode', () => {
   it('enables the whole tag from its row menu', async () => {
     window.localStorage.setItem('enable-tag-mode', 'true')
     setRoutes({
-      'GET /api/channel/': listBody([
+      'GET /api/v2/admin/channels': listBody([
         channelRow(1, { name: 'alpha', tag: 'blue' }),
       ]),
-      'POST /api/channel/tag/enabled': ok,
+      'POST /api/v2/admin/channels/tag/enabled': ok,
     })
     renderWithClient(<OpsChannelsPage />)
     await screen.findByText(/Tag: blue/)
@@ -244,9 +244,9 @@ describe('tag mode', () => {
     await userEvent.click(await screen.findByRole('menuitem', { name: /Enable All/ }))
 
     await waitFor(() =>
-      expect(calls('POST', '/api/channel/tag/enabled')).toHaveLength(1)
+      expect(calls('POST', '/api/v2/admin/channels/tag/enabled')).toHaveLength(1)
     )
-    expect(calls('POST', '/api/channel/tag/enabled')[0]?.data).toEqual({
+    expect(calls('POST', '/api/v2/admin/channels/tag/enabled')[0]?.data).toEqual({
       tag: 'blue',
     })
   })
@@ -273,10 +273,10 @@ describe('tag editing', () => {
 
   it("renames a tag without overwriting each channel's model list", async () => {
     setRoutes({
-      'GET /api/channel/': tagged,
+      'GET /api/v2/admin/channels': tagged,
       // the server reports the longest list among the tag's channels
-      'GET /api/channel/tag/models': { ...ok, data: 'model-a,model-b' },
-      'PUT /api/channel/tag': ok,
+      'GET /api/v2/admin/channels/tag/models': { ...ok, data: 'model-a,model-b' },
+      'PUT /api/v2/admin/channels/tag': ok,
     })
     const dialog = await openTagDialog('edit')
     const name = await within(dialog).findByLabelText(/Tag Name/)
@@ -284,8 +284,8 @@ describe('tag editing', () => {
     await userEvent.type(name, 'green')
     await userEvent.click(within(dialog).getByRole('button', { name: 'Save Changes' }))
 
-    await waitFor(() => expect(calls('PUT', '/api/channel/tag')).toHaveLength(1))
-    expect(calls('PUT', '/api/channel/tag')[0]?.data).toEqual({
+    await waitFor(() => expect(calls('PUT', '/api/v2/admin/channels/tag')).toHaveLength(1))
+    expect(calls('PUT', '/api/v2/admin/channels/tag')[0]?.data).toEqual({
       tag: 'blue',
       new_tag: 'green',
     })
@@ -293,9 +293,9 @@ describe('tag editing', () => {
 
   it('shows the server message when the tag update is refused', async () => {
     setRoutes({
-      'GET /api/channel/': tagged,
-      'GET /api/channel/tag/models': { ...ok, data: 'model-a' },
-      'PUT /api/channel/tag': { success: false, message: 'tag is locked' },
+      'GET /api/v2/admin/channels': tagged,
+      'GET /api/v2/admin/channels/tag/models': { ...ok, data: 'model-a' },
+      'PUT /api/v2/admin/channels/tag': { success: false, message: 'tag is locked' },
     })
     const dialog = await openTagDialog('edit')
     const name = await within(dialog).findByLabelText(/Tag Name/)
@@ -309,9 +309,9 @@ describe('tag editing', () => {
 
   it('batch edit sends only what changed', async () => {
     setRoutes({
-      'GET /api/channel/': tagged,
-      'GET /api/channel/tag/models': { ...ok, data: 'model-a,model-b' },
-      'PUT /api/channel/tag': ok,
+      'GET /api/v2/admin/channels': tagged,
+      'GET /api/v2/admin/channels/tag/models': { ...ok, data: 'model-a,model-b' },
+      'PUT /api/v2/admin/channels/tag': ok,
     })
     const dialog = await openTagDialog('batch')
     const mapping = await within(dialog).findByDisplayValue('blue')
@@ -319,8 +319,8 @@ describe('tag editing', () => {
     await userEvent.type(mapping, 'teal')
     await userEvent.click(within(dialog).getByRole('button', { name: /Save/ }))
 
-    await waitFor(() => expect(calls('PUT', '/api/channel/tag')).toHaveLength(1))
-    expect(calls('PUT', '/api/channel/tag')[0]?.data).toEqual({
+    await waitFor(() => expect(calls('PUT', '/api/v2/admin/channels/tag')).toHaveLength(1))
+    expect(calls('PUT', '/api/v2/admin/channels/tag')[0]?.data).toEqual({
       tag: 'blue',
       new_tag: 'teal',
     })
@@ -370,23 +370,23 @@ describe('multi-key channels', () => {
 
   it('lists the key pool with per-key status', async () => {
     setRoutes({
-      'GET /api/channel/': listBody([multi]),
-      'POST /api/channel/multi_key/manage': status,
+      'GET /api/v2/admin/channels': listBody([multi]),
+      'POST /api/v2/admin/channels/multi_key/manage': status,
     })
     const dialog = await openKeys()
 
     expect(await within(dialog).findByText('#1')).toBeInTheDocument()
     expect(within(dialog).getByText('#2')).toBeInTheDocument()
     expect(within(dialog).getByText('quota exhausted')).toBeInTheDocument()
-    expect(calls('POST', '/api/channel/multi_key/manage')[0]?.data).toMatchObject(
+    expect(calls('POST', '/api/v2/admin/channels/multi_key/manage')[0]?.data).toMatchObject(
       { channel_id: 1, action: 'get_key_status', page: 1 }
     )
   })
 
   it('disables one key after confirmation', async () => {
     setRoutes({
-      'GET /api/channel/': listBody([multi]),
-      'POST /api/channel/multi_key/manage': (cfg: Req) =>
+      'GET /api/v2/admin/channels': listBody([multi]),
+      'POST /api/v2/admin/channels/multi_key/manage': (cfg: Req) =>
         cfg.data?.action === 'get_key_status' ? status : { ...ok, message: 'done' },
     })
     const dialog = await openKeys()
@@ -398,7 +398,7 @@ describe('multi-key channels', () => {
 
     await waitFor(() =>
       expect(
-        calls('POST', '/api/channel/multi_key/manage').some(
+        calls('POST', '/api/v2/admin/channels/multi_key/manage').some(
           (c) => c.data?.action === 'disable_key' && c.data?.key_index === 0
         )
       ).toBe(true)
@@ -408,8 +408,8 @@ describe('multi-key channels', () => {
 
   it('shows the server message when a key action fails', async () => {
     setRoutes({
-      'GET /api/channel/': listBody([multi]),
-      'POST /api/channel/multi_key/manage': (cfg: Req) =>
+      'GET /api/v2/admin/channels': listBody([multi]),
+      'POST /api/v2/admin/channels/multi_key/manage': (cfg: Req) =>
         cfg.data?.action === 'get_key_status'
           ? status
           : { success: false, message: 'key index out of range' },
@@ -428,8 +428,8 @@ describe('multi-key channels', () => {
 
   it('shows the server message when loading the pool fails', async () => {
     setRoutes({
-      'GET /api/channel/': listBody([multi]),
-      'POST /api/channel/multi_key/manage': {
+      'GET /api/v2/admin/channels': listBody([multi]),
+      'POST /api/v2/admin/channels/multi_key/manage': {
         success: false,
         message: 'not a multi-key channel',
       },
@@ -442,7 +442,7 @@ describe('multi-key channels', () => {
   })
 
   it('does not offer key management on a single-key channel', async () => {
-    setRoutes({ 'GET /api/channel/': listBody([channelRow(1, { name: 'pool' })]) })
+    setRoutes({ 'GET /api/v2/admin/channels': listBody([channelRow(1, { name: 'pool' })]) })
     renderWithClient(<OpsChannelsPage />)
     await screen.findByText('pool')
     await userEvent.click(screen.getByRole('button', { name: 'Open menu' }))

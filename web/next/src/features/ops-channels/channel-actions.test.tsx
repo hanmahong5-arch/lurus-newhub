@@ -66,8 +66,8 @@ const ok = { success: true, message: '' }
 
 function setRoutes(extra: Record<string, Route> = {}) {
   routes = {
-    'GET /api/channel/': listBody([channelRow(1, { name: 'alpha' })]),
-    'GET /api/group/': { ...ok, data: ['default'] },
+    'GET /api/v2/admin/channels': listBody([channelRow(1, { name: 'alpha' })]),
+    'GET /api/v2/admin/groups': { ...ok, data: ['default'] },
     ...extra,
   }
 }
@@ -101,14 +101,14 @@ beforeEach(() => {
 
 describe('enable and disable', () => {
   it('disables with a partial update that carries only the id and status', async () => {
-    setRoutes({ 'PUT /api/channel/': { ...ok, data: {} } })
+    setRoutes({ 'PUT /api/v2/admin/channels': { ...ok, data: {} } })
     renderWithClient(<OpsChannelsPage />)
     await screen.findByText('alpha')
 
     await userEvent.click(screen.getByRole('button', { name: 'Disable' }))
 
-    await waitFor(() => expect(calls('PUT', '/api/channel/')).toHaveLength(1))
-    expect(calls('PUT', '/api/channel/')[0]?.data).toEqual({ id: 1, status: 2 })
+    await waitFor(() => expect(calls('PUT', '/api/v2/admin/channels')).toHaveLength(1))
+    expect(calls('PUT', '/api/v2/admin/channels')[0]?.data).toEqual({ id: 1, status: 2 })
     await waitFor(() =>
       expect(toastSuccess).toHaveBeenCalledWith('Channel disabled successfully')
     )
@@ -116,7 +116,7 @@ describe('enable and disable', () => {
 
   it('shows the server message when a 200 answers success:false', async () => {
     setRoutes({
-      'PUT /api/channel/': { success: false, message: 'cannot disable now' },
+      'PUT /api/v2/admin/channels': { success: false, message: 'cannot disable now' },
     })
     renderWithClient(<OpsChannelsPage />)
     await screen.findByText('alpha')
@@ -131,7 +131,7 @@ describe('enable and disable', () => {
 
   it('shows the server message when the request itself is refused', async () => {
     setRoutes({
-      'PUT /api/channel/': new ApiError('insufficient permission', {
+      'PUT /api/v2/admin/channels': new ApiError('insufficient permission', {
         status: 403,
       }),
     })
@@ -148,18 +148,18 @@ describe('enable and disable', () => {
 
 describe('delete', () => {
   it('asks for confirmation, then deletes by id', async () => {
-    setRoutes({ 'DELETE /api/channel/1': ok })
+    setRoutes({ 'DELETE /api/v2/admin/channels/1': ok })
     renderWithClient(<OpsChannelsPage />)
     await openRowMenu()
 
     await userEvent.click(await screen.findByRole('menuitem', { name: /Delete/ }))
-    expect(calls('DELETE', '/api/channel/1')).toHaveLength(0)
+    expect(calls('DELETE', '/api/v2/admin/channels/1')).toHaveLength(0)
 
     const dialog = await screen.findByRole('alertdialog')
     await userEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
 
     await waitFor(() =>
-      expect(calls('DELETE', '/api/channel/1')).toHaveLength(1)
+      expect(calls('DELETE', '/api/v2/admin/channels/1')).toHaveLength(1)
     )
   })
 })
@@ -167,7 +167,7 @@ describe('delete', () => {
 describe('test connection dialog', () => {
   it('tests every model and reports each result', async () => {
     setRoutes({
-      'GET /api/channel/test/1': (cfg: Req) =>
+      'GET /api/v2/admin/channels/test/1': (cfg: Req) =>
         cfg.params?.model === 'model-a'
           ? { success: true, message: '', time: 0.42 }
           : { success: false, message: 'upstream said no', time: 1.5 },
@@ -191,13 +191,13 @@ describe('test connection dialog', () => {
     expect(within(dialog).getByText('upstream said no')).toBeInTheDocument()
     expect(within(dialog).getByText('420ms')).toBeInTheDocument()
 
-    const tested = calls('GET', '/api/channel/test/1').map((c) => c.params?.model)
+    const tested = calls('GET', '/api/v2/admin/channels/test/1').map((c) => c.params?.model)
     expect(tested.sort()).toEqual(['model-a', 'model-b'])
   })
 
   it('tests one model with the chosen endpoint type', async () => {
     setRoutes({
-      'GET /api/channel/test/1': { success: true, message: '', time: 0.1 },
+      'GET /api/v2/admin/channels/test/1': { success: true, message: '', time: 0.1 },
     })
     renderWithClient(<OpsChannelsPage />)
     await openRowMenu()
@@ -214,9 +214,9 @@ describe('test connection dialog', () => {
     await userEvent.click(first as HTMLElement)
 
     await waitFor(() =>
-      expect(calls('GET', '/api/channel/test/1')).toHaveLength(1)
+      expect(calls('GET', '/api/v2/admin/channels/test/1')).toHaveLength(1)
     )
-    expect(calls('GET', '/api/channel/test/1')[0]?.params).toEqual({
+    expect(calls('GET', '/api/v2/admin/channels/test/1')[0]?.params).toEqual({
       model: 'model-a',
     })
   })
@@ -225,7 +225,7 @@ describe('test connection dialog', () => {
 describe('balance', () => {
   it('queries the upstream balance and shows it in USD', async () => {
     setRoutes({
-      'GET /api/channel/update_balance/1': { ...ok, balance: 12.5 },
+      'GET /api/v2/admin/channels/update_balance/1': { ...ok, balance: 12.5 },
     })
     renderWithClient(<OpsChannelsPage />)
     await openRowMenu()
@@ -247,10 +247,10 @@ describe('balance', () => {
 
   it('shows the failure instead of a stale balance', async () => {
     setRoutes({
-      'GET /api/channel/': listBody([
+      'GET /api/v2/admin/channels': listBody([
         channelRow(1, { name: 'alpha', balance: 3 }),
       ]),
-      'GET /api/channel/update_balance/1': {
+      'GET /api/v2/admin/channels/update_balance/1': {
         success: false,
         message: 'balance not supported',
       },
@@ -277,7 +277,7 @@ describe('balance', () => {
 describe('copy', () => {
   it('copies with the chosen suffix and resets the balance', async () => {
     setRoutes({
-      'POST /api/channel/copy/1': { ...ok, data: { id: 9 } },
+      'POST /api/v2/admin/channels/copy/1': { ...ok, data: { id: 9 } },
     })
     renderWithClient(<OpsChannelsPage />)
     await openRowMenu()
@@ -293,9 +293,9 @@ describe('copy', () => {
     )
 
     await waitFor(() =>
-      expect(calls('POST', '/api/channel/copy/1')).toHaveLength(1)
+      expect(calls('POST', '/api/v2/admin/channels/copy/1')).toHaveLength(1)
     )
-    expect(calls('POST', '/api/channel/copy/1')[0]?.params).toEqual({
+    expect(calls('POST', '/api/v2/admin/channels/copy/1')[0]?.params).toEqual({
       suffix: '-b',
       reset_balance: true,
     })

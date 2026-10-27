@@ -118,9 +118,10 @@ export async function importChannelKeys(body: ImportRequest) {
 }
 
 // ============================================================================
-// v1 channel management (/api/channel/...). These handlers answer HTTP 200
-// with {success:false,message} on business failure, so each function returns
-// the envelope as-is: callers check `success` (or use requireServerSuccess).
+// Admin channel management (/api/v2/admin/channels/...). Same handlers as the
+// deprecated /api/channel surface; they answer HTTP 200 with
+// {success:false,message} on business failure, so each function returns the
+// envelope as-is: callers check `success` (or use requireServerSuccess).
 // HTTP-level failures (401/403/5xx) still reject with an ApiError.
 // ============================================================================
 
@@ -144,7 +145,7 @@ export function requireServerSuccess<
 export function getChannels(params: GetChannelsParams = {}) {
   return call<GetChannelsResponse>({
     method: 'GET',
-    url: '/api/channel/',
+    url: '/api/v2/admin/channels',
     params,
   })
 }
@@ -152,24 +153,24 @@ export function getChannels(params: GetChannelsParams = {}) {
 export function searchChannels(params: SearchChannelsParams) {
   return call<SearchChannelsResponse>({
     method: 'GET',
-    url: '/api/channel/search',
+    url: '/api/v2/admin/channels/search',
     params,
   })
 }
 
 export function getChannel(id: number) {
-  return call<GetChannelResponse>({ method: 'GET', url: `/api/channel/${id}` })
+  return call<GetChannelResponse>({ method: 'GET', url: `/api/v2/admin/channels/${id}` })
 }
 
 export function createChannel(data: AddChannelRequest) {
-  return call<ServerResponse>({ method: 'POST', url: '/api/channel/', data })
+  return call<ServerResponse>({ method: 'POST', url: '/api/v2/admin/channels', data })
 }
 
 /** Partial update: the server only writes non-zero fields of the body. */
 export function updateChannel(id: number, data: Partial<Channel>) {
   return call<ServerResponse<Channel>>({
     method: 'PUT',
-    url: '/api/channel/',
+    url: '/api/v2/admin/channels',
     data: { id, ...data },
   })
 }
@@ -208,13 +209,13 @@ export async function batchUpdateChannelStatus(
 }
 
 export function deleteChannel(id: number) {
-  return call<ServerResponse>({ method: 'DELETE', url: `/api/channel/${id}` })
+  return call<ServerResponse>({ method: 'DELETE', url: `/api/v2/admin/channels/${id}` })
 }
 
 export function batchDeleteChannels(data: BatchDeleteParams) {
   return call<ServerResponse<number>>({
     method: 'POST',
-    url: '/api/channel/batch',
+    url: '/api/v2/admin/channels/batch',
     data,
   })
 }
@@ -222,7 +223,7 @@ export function batchDeleteChannels(data: BatchDeleteParams) {
 export function batchSetChannelTag(data: BatchSetTagParams) {
   return call<ServerResponse<number>>({
     method: 'POST',
-    url: '/api/channel/batch/tag',
+    url: '/api/v2/admin/channels/batch/tag',
     data,
   })
 }
@@ -233,7 +234,7 @@ export function testChannel(
 ) {
   return call<ChannelTestResponse>({
     method: 'GET',
-    url: `/api/channel/test/${id}`,
+    url: `/api/v2/admin/channels/test/${id}`,
     params,
   })
 }
@@ -241,14 +242,14 @@ export function testChannel(
 export function updateChannelBalance(id: number) {
   return call<ChannelBalanceResponse>({
     method: 'GET',
-    url: `/api/channel/update_balance/${id}`,
+    url: `/api/v2/admin/channels/update_balance/${id}`,
   })
 }
 
 export function fetchUpstreamModels(id: number) {
   return call<FetchModelsResponse>({
     method: 'GET',
-    url: `/api/channel/fetch_models/${id}`,
+    url: `/api/v2/admin/channels/fetch_models/${id}`,
   })
 }
 
@@ -260,7 +261,7 @@ export function fetchModels(data: {
 }) {
   return call<FetchModelsResponse>({
     method: 'POST',
-    url: '/api/channel/fetch_models',
+    url: '/api/v2/admin/channels/fetch_models',
     data,
   })
 }
@@ -268,7 +269,7 @@ export function fetchModels(data: {
 export function copyChannel(id: number, params: CopyChannelParams = {}) {
   return call<CopyChannelResponse>({
     method: 'POST',
-    url: `/api/channel/copy/${id}`,
+    url: `/api/v2/admin/channels/copy/${id}`,
     params,
   })
 }
@@ -276,14 +277,14 @@ export function copyChannel(id: number, params: CopyChannelParams = {}) {
 export function fixChannelAbilities() {
   return call<ServerResponse<{ success: number; fails: number }>>({
     method: 'POST',
-    url: '/api/channel/fix',
+    url: '/api/v2/admin/channels/fix',
   })
 }
 
 export function deleteDisabledChannels() {
   return call<ServerResponse<number>>({
     method: 'DELETE',
-    url: '/api/channel/disabled',
+    url: '/api/v2/admin/channels/disabled',
   })
 }
 
@@ -291,18 +292,18 @@ export function deleteDisabledChannels() {
 export function getChannelKey(id: number) {
   return call<ServerResponse<{ key: string }>>({
     method: 'POST',
-    url: `/api/channel/${id}/key`,
+    url: `/api/v2/admin/channels/${id}/key`,
   })
 }
 
 export function testAllChannels() {
-  return call<ServerResponse>({ method: 'GET', url: '/api/channel/test' })
+  return call<ServerResponse>({ method: 'GET', url: '/api/v2/admin/channels/test' })
 }
 
 export function updateAllChannelsBalance() {
   return call<ServerResponse>({
     method: 'GET',
-    url: '/api/channel/update_balance',
+    url: '/api/v2/admin/channels/update_balance',
   })
 }
 
@@ -311,7 +312,7 @@ export function updateAllChannelsBalance() {
 export function manageMultiKeys(params: MultiKeyManageParams) {
   return call<ServerResponse<unknown>>({
     method: 'POST',
-    url: '/api/channel/multi_key/manage',
+    url: '/api/v2/admin/channels/multi_key/manage',
     data: params,
   })
 }
@@ -348,7 +349,7 @@ export const deleteDisabledMultiKeys = multiKeyAction('delete_disabled_keys')
 export function enableTagChannels(tag: string) {
   return call<ServerResponse>({
     method: 'POST',
-    url: '/api/channel/tag/enabled',
+    url: '/api/v2/admin/channels/tag/enabled',
     data: { tag },
   })
 }
@@ -356,7 +357,7 @@ export function enableTagChannels(tag: string) {
 export function disableTagChannels(tag: string) {
   return call<ServerResponse>({
     method: 'POST',
-    url: '/api/channel/tag/disabled',
+    url: '/api/v2/admin/channels/tag/disabled',
     data: { tag },
   })
 }
@@ -364,7 +365,7 @@ export function disableTagChannels(tag: string) {
 export function editTagChannels(params: TagOperationParams) {
   return call<ServerResponse>({
     method: 'PUT',
-    url: '/api/channel/tag',
+    url: '/api/v2/admin/channels/tag',
     data: params,
   })
 }
@@ -372,7 +373,7 @@ export function editTagChannels(params: TagOperationParams) {
 export function getTagModels(tag: string) {
   return call<ServerResponse<string>>({
     method: 'GET',
-    url: '/api/channel/tag/models',
+    url: '/api/v2/admin/channels/tag/models',
     params: { tag },
   })
 }
@@ -385,7 +386,7 @@ export function deleteOllamaModel(params: {
 }) {
   return call<ServerResponse>({
     method: 'DELETE',
-    url: '/api/channel/ollama/delete',
+    url: '/api/v2/admin/channels/ollama/delete',
     data: params,
   })
 }
@@ -393,13 +394,13 @@ export function deleteOllamaModel(params: {
 // ---- pickers ----------------------------------------------------------------
 
 export function getGroups() {
-  return call<ServerResponse<string[]>>({ method: 'GET', url: '/api/group/' })
+  return call<ServerResponse<string[]>>({ method: 'GET', url: '/api/v2/admin/groups' })
 }
 
 export function getEnabledModels() {
   return call<ServerResponse<string[]>>({
     method: 'GET',
-    url: '/api/channel/models_enabled',
+    url: '/api/v2/admin/channels/models_enabled',
   })
 }
 
@@ -408,14 +409,14 @@ export function getPrefillGroups(type: 'model' | 'group' = 'model') {
     ServerResponse<
       Array<{ id: number; name: string; items: string | string[] }>
     >
-  >({ method: 'GET', url: '/api/prefill_group/', params: { type } })
+  >({ method: 'GET', url: '/api/v2/admin/prefill-groups', params: { type } })
 }
 
 /** Every model id the relay knows (admin catalogue picker). */
 export function getAllModels() {
   return call<ServerResponse<Array<{ id: string }>>>({
     method: 'GET',
-    url: '/api/channel/models',
+    url: '/api/v2/admin/channels/models',
   })
 }
 

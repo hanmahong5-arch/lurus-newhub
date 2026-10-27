@@ -128,7 +128,7 @@ beforeEach(() => {
   v1Items = [channelRow(1, { name: 'pool-1' })]
   v1Failure = null
   request.mockImplementation(async (cfg: { method: string; url: string }) => {
-    if (cfg.method === 'GET' && cfg.url === '/api/channel/') {
+    if (cfg.method === 'GET' && cfg.url === '/api/v2/admin/channels') {
       if (v1Failure) throw v1Failure
       return { data: listBody(v1Items) }
     }

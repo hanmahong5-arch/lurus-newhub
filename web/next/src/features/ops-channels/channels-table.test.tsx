@@ -66,9 +66,9 @@ const ok = { success: true, message: '' }
 
 function setRoutes(extra: Record<string, Route> = {}) {
   routes = {
-    'GET /api/group/': { ...ok, data: ['default', 'vip'] },
-    'GET /api/channel/models_enabled': { ...ok, data: ['model-a'] },
-    'GET /api/prefill_group': { ...ok, data: [] },
+    'GET /api/v2/admin/groups': { ...ok, data: ['default', 'vip'] },
+    'GET /api/v2/admin/channels/models_enabled': { ...ok, data: ['model-a'] },
+    'GET /api/v2/admin/prefill-groups': { ...ok, data: [] },
     ...extra,
   }
 }
@@ -76,7 +76,7 @@ function setRoutes(extra: Record<string, Route> = {}) {
 function lastListParams(): Record<string, unknown> | undefined {
   const calls = request.mock.calls
     .map((c) => c[0] as Req)
-    .filter((c) => c.method === 'GET' && c.url === '/api/channel/')
+    .filter((c) => c.method === 'GET' && c.url === '/api/v2/admin/channels')
   return calls.at(-1)?.params
 }
 
@@ -107,7 +107,7 @@ beforeEach(() => {
 describe('channel table', () => {
   it('lists the v1 channels with type tabs that carry the server counts', async () => {
     setRoutes({
-      'GET /api/channel/': listBody(
+      'GET /api/v2/admin/channels': listBody(
         [
           channelRow(1, { name: 'alpha', type: 1, group: 'default,vip' }),
           channelRow(2, { name: 'beta', type: 14 }),
@@ -139,7 +139,7 @@ describe('channel table', () => {
 
   it('filters by type when a tab is picked', async () => {
     setRoutes({
-      'GET /api/channel/': (cfg: Req) =>
+      'GET /api/v2/admin/channels': (cfg: Req) =>
         listBody(
           cfg.params?.type === 14
             ? [channelRow(2, { name: 'beta', type: 14 })]
@@ -163,7 +163,7 @@ describe('channel table', () => {
 
   it('moves between type tabs with the arrow keys', async () => {
     setRoutes({
-      'GET /api/channel/': (cfg: Req) =>
+      'GET /api/v2/admin/channels': (cfg: Req) =>
         listBody(
           cfg.params?.type === 14
             ? [channelRow(2, { name: 'beta', type: 14 })]
@@ -194,8 +194,8 @@ describe('channel table', () => {
 
   it('searches by keyword through the search endpoint', async () => {
     setRoutes({
-      'GET /api/channel/': listBody([channelRow(1, { name: 'alpha' })]),
-      'GET /api/channel/search': (cfg: Req) =>
+      'GET /api/v2/admin/channels': listBody([channelRow(1, { name: 'alpha' })]),
+      'GET /api/v2/admin/channels/search': (cfg: Req) =>
         listBody([channelRow(7, { name: `found-${String(cfg.params?.keyword)}` })]),
     })
     renderWithClient(<OpsChannelsPage />)
@@ -208,13 +208,13 @@ describe('channel table', () => {
     expect(await screen.findByText('found-zed')).toBeInTheDocument()
     const search = request.mock.calls
       .map((c) => c[0] as Req)
-      .find((c) => c.url === '/api/channel/search')
+      .find((c) => c.url === '/api/v2/admin/channels/search')
     expect(search?.params).toMatchObject({ keyword: 'zed', p: 1 })
   })
 
   it('shows an error, not an empty list, when loading fails', async () => {
     setRoutes({
-      'GET /api/channel/': new ApiError('boom', { status: 500 }),
+      'GET /api/v2/admin/channels': new ApiError('boom', { status: 500 }),
     })
     renderWithClient(<OpsChannelsPage />)
     expect(await screen.findByText('Could not load channels')).toBeInTheDocument()
@@ -224,7 +224,7 @@ describe('channel table', () => {
 
   it('treats success:false on a 200 as an error too', async () => {
     setRoutes({
-      'GET /api/channel/': { success: false, message: 'denied by server' },
+      'GET /api/v2/admin/channels': { success: false, message: 'denied by server' },
     })
     renderWithClient(<OpsChannelsPage />)
     expect(await screen.findByText('Could not load channels')).toBeInTheDocument()
@@ -233,7 +233,7 @@ describe('channel table', () => {
 
   it('joins the ops fields (routable, mismatch) onto the v1 rows by id', async () => {
     setRoutes({
-      'GET /api/channel/': listBody([channelRow(1), channelRow(2)]),
+      'GET /api/v2/admin/channels': listBody([channelRow(1), channelRow(2)]),
     })
     tenantGet.mockImplementation((path: string) => {
       if (path === '/user/me') {
@@ -282,10 +282,10 @@ describe('channel table', () => {
   it('renders the card view with the same row actions', async () => {
     window.localStorage.setItem('channels:view-mode', 'card')
     setRoutes({
-      'GET /api/channel/': listBody([
+      'GET /api/v2/admin/channels': listBody([
         channelRow(1, { name: 'alpha', status: 2 }),
       ]),
-      'PUT /api/channel/': { success: true, message: '' },
+      'PUT /api/v2/admin/channels': { success: true, message: '' },
     })
     renderWithClient(<OpsChannelsPage />)
 

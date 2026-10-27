@@ -565,8 +565,11 @@ func SetApiV2Router(router *gin.Engine) {
 			}
 		}
 
+		// /admin/{groups,channels,prefill-groups}: AdminJWTAuth (api_v2_admin_staff.go).
+		mountAdminStaffFacade(apiV2)
+
 		// ================================================================
-		// Platform Admin Routes (AdminJWTAuth with root role)
+		// Platform Admin Routes (RootJWTAuth — root role)
 		// ================================================================
 
 		adminRoute := apiV2.Group("/admin")
@@ -665,11 +668,8 @@ func SetApiV2Router(router *gin.Engine) {
 				// per-device session of a user (SESSION_REGISTRY_ENABLED).
 				adminUsers.DELETE("/:id/sessions", handler.RevokeUserSessionsAdminV2)
 			}
-			adminRoute.GET("/groups", handler.ListAdminGroupsV2)
-			// Thin facade over GetAllChannels so console openrouter-sync /
-			// future ops pages leave deprecated /api/channel without a
-			// rewrite of channel business logic (ops-channels full migrate = P2).
-			adminRoute.GET("/channels", handler.GetAllChannels)
+			// /admin/groups + /admin/channels + /admin/prefill-groups live on
+			// adminStaff (AdminJWTAuth) — see mountAdminStaffFacade.
 
 			// Platform content rules and channel override templates (migration 050).
 			adminRoute.GET("/content-rules", handler.ListPlatformContentRulesV2)
