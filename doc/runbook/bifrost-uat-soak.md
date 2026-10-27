@@ -1,6 +1,15 @@
 # Bifrost UAT soak
 
-**Status**: env armed on `r6-uat` (`RELAY_ENGINE=bifrost`, `RELAY_BIFROST_MODES=chat`). Production stays `legacy`.
+**Status**: armed on `r6-uat` (`RELAY_ENGINE=bifrost`, `RELAY_BIFROST_MODES=chat`). Stage/prod stay `legacy`.
+
+## Evidence (2026-10-27)
+
+| Check | Result |
+|-------|--------|
+| Image | `main-20261027-3c34758` / `sha256:381bb60e…` |
+| Env | `RELAY_ENGINE=bifrost`, `RELAY_BIFROST_MODES=chat` on `ns/lurus-newhub-uat` deploy |
+| Boot log | `relay engine: bifrost (modes=chat)` |
+| Metrics | `lurus_gateway_relay_engine_total` appears only after first chat; series empty until traffic |
 
 ## Check after ArgoCD converges
 
