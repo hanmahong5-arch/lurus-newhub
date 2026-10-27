@@ -10,7 +10,7 @@ import (
 
 // V1SunsetDate is the announced calendar date for REST /api/* removal
 // (doc/decisions/v1-deprecation.md Phase 1). Relay OpenAI /v1/* is out of scope.
-const V1SunsetDate = "2026-06-30"
+const V1SunsetDate = "2027-03-31"
 
 // v1PublicLongLived prefixes stay on /api without Deprecation headers — they
 // are boot/status surfaces the SPA and anonymous clients still need, and are
@@ -39,7 +39,7 @@ func isV1PublicLongLived(path string) bool {
 // progress is visible on /metrics. Mount on SetApiRouter only — never on
 // relay /v1 or /api/v2.
 func V1DeprecationHeaders() gin.HandlerFunc {
-	sunsetHTTP := time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC).Format(time.RFC1123)
+	sunsetHTTP := time.Date(2027, 3, 31, 0, 0, 0, 0, time.UTC).Format(time.RFC1123)
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
 		if !strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/api/v2") {

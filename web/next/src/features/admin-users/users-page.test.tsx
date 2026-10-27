@@ -1,4 +1,4 @@
-/*
+﻿/*
 Copyright (C) 2023-2026 QuantumNous
 
 This program is free software: you can redistribute it and/or modify
@@ -102,14 +102,15 @@ function user(over: Record<string, unknown> = {}) {
 }
 
 function pageOf(items: unknown[]) {
-  return { items, total: items.length, page: 1, page_size: 20 }
+  return { users: items, total: items.length, page: 1, page_size: 20 }
 }
 
 /** Route api.get by URL; unknown URLs answer an empty list. */
 function serve(handlers: Record<string, unknown>) {
   apiGet.mockImplementation((url: string) => {
     if (url === '/api/status') return Promise.resolve(STATUS)
-    if (url === '/api/group/') return Promise.resolve(['default', 'vip'])
+    if (url === '/api/v2/admin/groups')
+      return Promise.resolve(['default', 'vip'])
     const v = handlers[url]
     if (v instanceof Error) return Promise.reject(v)
     if (v === undefined) return Promise.resolve(pageOf([]))
@@ -143,7 +144,7 @@ beforeEach(() => {
 
 describe('AdminUsersPage', () => {
   it('lists users with role, group and money formatted from the status config', async () => {
-    serve({ '/api/user/': pageOf([user(), user({ id: 8, username: 'bob', display_name: 'Bob', role: 10, quota: 500_000 })]) })
+    serve({ '/api/v2/admin/users': pageOf([user(), user({ id: 8, username: 'bob', display_name: 'Bob', role: 10, quota: 500_000 })]) })
     renderPage()
 
     expect(await screen.findByText('alice')).toBeInTheDocument()
@@ -152,15 +153,24 @@ describe('AdminUsersPage', () => {
     // quota 1,000,000 at 500,000 per unit is $2.00; never a guessed figure.
     expect(await screen.findByText('$2.00')).toBeInTheDocument()
     expect(screen.getByText('$1.00')).toBeInTheDocument()
-    expect(apiGet).toHaveBeenCalledWith('/api/user/', {
-      params: { p: 1, page_size: 20 },
+    expect(apiGet).toHaveBeenCalledWith('/api/v2/admin/users', {
+      params: { page: 1, page_size: 20 },
     })
   })
 
   it('searches by keyword on the server after the debounce', async () => {
-    serve({
-      '/api/user/': pageOf([user(), user({ id: 8, username: 'bob' })]),
-      '/api/user/search': pageOf([user({ id: 8, username: 'bob' })]),
+    apiGet.mockImplementation((url: string, opts?: { params?: { keyword?: string } }) => {
+      if (url === '/api/status') return Promise.resolve(STATUS)
+      if (url === '/api/v2/admin/groups') return Promise.resolve(['default', 'vip'])
+      if (url === '/api/v2/admin/users') {
+        if (opts?.params?.keyword === 'bob') {
+          return Promise.resolve(pageOf([user({ id: 8, username: 'bob' })]))
+        }
+        return Promise.resolve(
+          pageOf([user(), user({ id: 8, username: 'bob' })])
+        )
+      }
+      return Promise.resolve(pageOf([]))
     })
     renderPage()
     await screen.findByText('alice')
@@ -171,8 +181,8 @@ describe('AdminUsersPage', () => {
     )
 
     await waitFor(() =>
-      expect(apiGet).toHaveBeenCalledWith('/api/user/search', {
-        params: { keyword: 'bob', group: '', p: 1, page_size: 20 },
+      expect(apiGet).toHaveBeenCalledWith('/api/v2/admin/users', {
+        params: { keyword: 'bob', page: 1, page_size: 20 },
       })
     )
     await waitFor(() => expect(screen.queryByText('alice')).not.toBeInTheDocument())
@@ -182,7 +192,7 @@ describe('AdminUsersPage', () => {
   it('narrows the loaded page by status and says it is page-only', async () => {
     routerState.search = { status: ['2'] }
     serve({
-      '/api/user/': pageOf([user(), user({ id: 8, username: 'bob', status: 2 })]),
+      '/api/v2/admin/users': pageOf([user(), user({ id: 8, username: 'bob', status: 2 })]),
     })
     renderPage()
 
@@ -194,13 +204,13 @@ describe('AdminUsersPage', () => {
       )
     ).toBeInTheDocument()
     // The server was not asked to filter by status.
-    expect(apiGet).toHaveBeenCalledWith('/api/user/', {
-      params: { p: 1, page_size: 20 },
+    expect(apiGet).toHaveBeenCalledWith('/api/v2/admin/users', {
+      params: { page: 1, page_size: 20 },
     })
   })
 
   it('shows an error state with retry when the list cannot load', async () => {
-    serve({ '/api/user/': new ApiError('database is down', { status: 500 }) })
+    serve({ '/api/v2/admin/users': new ApiError('database is down', { status: 500 }) })
     renderPage()
 
     expect(await screen.findByText('Failed to load users')).toBeInTheDocument()
@@ -210,9 +220,9 @@ describe('AdminUsersPage', () => {
 
   it('disables a user by re-reading the live row and sending every field back', async () => {
     serve({
-      '/api/user/': pageOf([user()]),
+      '/api/v2/admin/users': pageOf([user()]),
       // The balance moved since the table loaded: the write must carry this.
-      '/api/user/7': user({ quota: 1_234_567, remark: 'vip customer' }),
+      '/api/v2/admin/users/7': user({ quota: 1_234_567, remark: 'vip customer' }),
     })
     renderPage()
 
@@ -220,9 +230,7 @@ describe('AdminUsersPage', () => {
     await userEvent.click(await screen.findByRole('menuitem', { name: /^Disable/ }))
 
     await waitFor(() => expect(apiPut).toHaveBeenCalled())
-    expect(apiPut).toHaveBeenCalledWith('/api/user/', {
-      id: 7,
-      username: 'alice',
+    expect(apiPut).toHaveBeenCalledWith('/api/v2/admin/users/7', {
       display_name: 'Alice',
       group: 'vip',
       quota: 1_234_567,
@@ -235,8 +243,8 @@ describe('AdminUsersPage', () => {
 
   it('surfaces the server message when the update is refused', async () => {
     serve({
-      '/api/user/': pageOf([user()]),
-      '/api/user/7': user(),
+      '/api/v2/admin/users': pageOf([user()]),
+      '/api/v2/admin/users/7': user(),
     })
     apiPut.mockRejectedValue(new ApiError('无权更新同权限等级或更高权限等级的用户信息'))
     renderPage()
@@ -254,8 +262,8 @@ describe('AdminUsersPage', () => {
 
   it('adds money to the balance in quota units computed from the live row', async () => {
     serve({
-      '/api/user/': pageOf([user()]),
-      '/api/user/7': user({ quota: 1_000_000 }),
+      '/api/v2/admin/users': pageOf([user()]),
+      '/api/v2/admin/users/7': user({ quota: 1_000_000 }),
     })
     renderPage()
 
@@ -268,8 +276,8 @@ describe('AdminUsersPage', () => {
     // $2 at 500,000 per unit is 1,000,000 quota on top of 1,000,000.
     await waitFor(() =>
       expect(apiPut).toHaveBeenCalledWith(
-        '/api/user/',
-        expect.objectContaining({ id: 7, quota: 2_000_000 })
+        '/api/v2/admin/users/7',
+        expect.objectContaining({ quota: 2_000_000 })
       )
     )
     await waitFor(() =>
@@ -279,8 +287,8 @@ describe('AdminUsersPage', () => {
 
   it('refuses a subtraction that would take the balance below zero', async () => {
     serve({
-      '/api/user/': pageOf([user()]),
-      '/api/user/7': user({ quota: 500_000 }),
+      '/api/v2/admin/users': pageOf([user()]),
+      '/api/v2/admin/users/7': user({ quota: 500_000 }),
     })
     renderPage()
 
@@ -296,7 +304,7 @@ describe('AdminUsersPage', () => {
 
   it('hides delete and 2FA reset from a non-root admin', async () => {
     tenantGet.mockResolvedValue({ id: 2, role: 10, username: 'ops', quota: 0, used_quota: 0, remaining_quota: 0 })
-    serve({ '/api/user/': pageOf([user()]) })
+    serve({ '/api/v2/admin/users': pageOf([user()]) })
     renderPage()
 
     await openRowMenu('alice')
@@ -306,7 +314,7 @@ describe('AdminUsersPage', () => {
   })
 
   it('deletes a user through the platform admin route for root', async () => {
-    serve({ '/api/user/': pageOf([user()]) })
+    serve({ '/api/v2/admin/users': pageOf([user()]) })
     apiDelete.mockResolvedValue(undefined)
     renderPage()
 
@@ -320,7 +328,7 @@ describe('AdminUsersPage', () => {
   })
 
   it('requires a reason before resetting two-factor and sends it', async () => {
-    serve({ '/api/user/': pageOf([user()]) })
+    serve({ '/api/v2/admin/users': pageOf([user()]) })
     apiPost.mockResolvedValue({ notified: true })
     renderPage()
 

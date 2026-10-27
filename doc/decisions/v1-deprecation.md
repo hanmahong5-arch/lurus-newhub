@@ -2,7 +2,7 @@
 
 **Status**: Accepted (In progress — Phase 1 Announce)
 **Date**: 2026-02-03
-**Updated**: 2026-10-25
+**Updated**: 2026-10-27
 **Relates to**: ADR-API-007 (architecture.md)
 
 ## Context
@@ -47,13 +47,18 @@ Moved to v2 in this cycle:
 
 Still on deprecated `/api` (headers + metric; migrate next):
 
-- Platform channel admin (`/api/channel/...`) — ops-channels console
-- Platform user admin (`/api/user/`, `/api/group/`) — admin-users console
-- Ratio sync, log purge, `rest_model_ratio`, Midjourney/task shells as applicable
+- Platform channel admin CRUD (`/api/channel/...`) — ops-channels console (P2 facade)
+- Ratio sync job APIs under `/api/openrouter-sync` (channel picker now uses `/api/v2/admin/channels`)
+- Log purge, `rest_model_ratio`, Midjourney/task shells as applicable
+
+Moved to v2 (2026-10-27):
+
+- Admin users list/get/put + groups → `/api/v2/admin/users`, `/api/v2/admin/groups`
+- OpenRouter sync channel picker → `/api/v2/admin/channels`
 
 ## Consequences
 
 - (+) Deprecation is observable to HTTP clients and Prometheus
 - (+) Account security settings no longer depend on the sunset surface
-- (-) External integrations using v1 session auth need the Sunset date (`2026-06-30`) as a planning signal
-- (-) Ops channel/user admin pages still emit deprecated traffic until Phase Migration finishes those clients
+- (-) External integrations using v1 session auth need the Sunset date (`2027-03-31`) as a planning signal
+- (-) Ops channel admin pages still emit deprecated traffic until the channels facade migrates; admin-users / openrouter channel picker move to `/api/v2/admin/*` in the same cycle as the Sunset bump

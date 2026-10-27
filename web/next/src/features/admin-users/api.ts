@@ -30,45 +30,50 @@ import type {
 export const usersQueryKey = ['admin-users'] as const
 export const groupsQueryKey = ['admin-user-groups'] as const
 
+type V2UserListData = {
+  users?: AdminUser[] | null
+  total: number
+  page: number
+  page_size: number
+}
+
 /**
- * GET /api/user/ (all) or /api/user/search (keyword and/or group).
- * Platform operators see every tenant, a tenant admin only their own.
- * The server ignores status/role/sort parameters, so none are sent.
+ * GET /api/v2/admin/users — keyword/group filter + pagination.
+ * Platform root only (same gate as the handler).
  */
 export async function listUsers(params: UserListParams): Promise<UserListPage> {
-  const searching = params.keyword.trim() !== '' || params.group !== ''
-  const page = await api.get<UserListPage>(
-    searching ? '/api/user/search' : '/api/user/',
-    {
-      params: {
-        ...(searching
-          ? { keyword: params.keyword.trim(), group: params.group }
-          : {}),
-        p: params.page,
-        page_size: params.pageSize,
-      },
-    }
-  )
-  return { ...page, items: page.items ?? [] }
+  const query: Record<string, string | number> = {
+    page: params.page,
+    page_size: params.pageSize,
+  }
+  const keyword = params.keyword.trim()
+  if (keyword) query.keyword = keyword
+  if (params.group) query.group = params.group
+  const data = await api.get<V2UserListData>('/api/v2/admin/users', {
+    params: query,
+  })
+  return {
+    items: data.users ?? [],
+    total: data.total,
+    page: data.page,
+    page_size: data.page_size,
+  }
 }
 
 export function getUser(id: number): Promise<AdminUser> {
-  return api.get<AdminUser>(`/api/user/${id}`)
+  return api.get<AdminUser>(`/api/v2/admin/users/${id}`)
 }
 
 /** Group names that exist in the group ratio table. */
 export const groupsQueryOptions = queryOptions({
   queryKey: groupsQueryKey,
-  queryFn: async () => (await api.get<string[]>('/api/group/')) ?? [],
+  queryFn: async () => (await api.get<string[]>('/api/v2/admin/groups')) ?? [],
   staleTime: 5 * 60_000,
 })
 
 /**
- * PUT /api/user/ rewrites username, display_name, group, quota and remark from
- * the body on every call (a missing field is saved as empty / zero), and the
- * row on screen may be stale: quota moves with every request the user makes.
- * So every write first reads the user's current row, lets `build` derive the
- * change from it, and sends the complete set back.
+ * PUT /api/v2/admin/users/:id — role/status/quota/group/display_name/remark.
+ * Reads current row first so quota edits are not racing a stale screen value.
  */
 export async function updateUser(
   id: number,
@@ -77,9 +82,7 @@ export async function updateUser(
   const current = await getUser(id)
   const patch = build(current)
   const next: AdminUser = { ...current, ...patch }
-  await api.put('/api/user/', {
-    id: current.id,
-    username: current.username,
+  const data = await api.put<AdminUser>(`/api/v2/admin/users/${id}`, {
     display_name: next.display_name,
     group: next.group,
     quota: next.quota,
@@ -87,7 +90,7 @@ export async function updateUser(
     role: next.role,
     status: next.status,
   })
-  return next
+  return data ?? next
 }
 
 /** DELETE /api/v2/admin/users/:id - platform operator (root) only. */

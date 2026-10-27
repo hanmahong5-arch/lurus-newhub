@@ -658,12 +658,18 @@ func SetApiV2Router(router *gin.Engine) {
 			adminUsers := adminRoute.Group("/users")
 			{
 				adminUsers.GET("", handler.ListAdminUsersV2)
+				adminUsers.GET("/:id", handler.GetAdminUserV2)
 				adminUsers.PUT("/:id", handler.UpdateAdminUserV2)
 				adminUsers.DELETE("/:id", handler.DeleteAdminUserV2)
 				// L7: "compromised account" runbook step — revoke every
 				// per-device session of a user (SESSION_REGISTRY_ENABLED).
 				adminUsers.DELETE("/:id/sessions", handler.RevokeUserSessionsAdminV2)
 			}
+			adminRoute.GET("/groups", handler.ListAdminGroupsV2)
+			// Thin facade over GetAllChannels so console openrouter-sync /
+			// future ops pages leave deprecated /api/channel without a
+			// rewrite of channel business logic (ops-channels full migrate = P2).
+			adminRoute.GET("/channels", handler.GetAllChannels)
 
 			// Platform content rules and channel override templates (migration 050).
 			adminRoute.GET("/content-rules", handler.ListPlatformContentRulesV2)

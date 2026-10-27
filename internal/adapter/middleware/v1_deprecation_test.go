@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -20,8 +21,8 @@ func TestV1DeprecationHeaders_SetsOnLegacyAPI(t *testing.T) {
 	if w.Header().Get("Deprecation") != "true" {
 		t.Fatalf("Deprecation=%q", w.Header().Get("Deprecation"))
 	}
-	if w.Header().Get("Sunset") == "" {
-		t.Fatal("missing Sunset")
+	if got := w.Header().Get("Sunset"); got == "" || !strings.Contains(got, "2027") {
+		t.Fatalf("Sunset=%q, want 2027-03-31 window", got)
 	}
 }
 

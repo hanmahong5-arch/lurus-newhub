@@ -251,6 +251,12 @@ spec:
             # cannot spend the whole process upstream concurrency budget.
             - name: RELAY_MAX_CONCURRENT_PER_TENANT
               value: "64"
+            # Bifrost UAT soak (three-track leftovers B4): chat only; prod
+            # stays RELAY_ENGINE=legacy. Flip back to legacy if soak fails.
+            - name: RELAY_ENGINE
+              value: "bifrost"
+            - name: RELAY_BIFROST_MODES
+              value: "chat"
             # Below the 1Gi container limit so the Go heap backs off before the
             # cgroup OOM-kills the pod.
             - name: GOMEMLIMIT

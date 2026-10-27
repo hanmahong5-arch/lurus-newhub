@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-/** A row of GET /api/user/ and GET /api/user/search (repo.User, v1). */
+/** A row of GET /api/v2/admin/users (adminUserView). */
 export interface AdminUser {
   id: number
   tenant_id?: string
@@ -36,7 +36,7 @@ export interface AdminUser {
   DeletedAt?: string | null
 }
 
-/** `pageInfo` of the v1 list handlers. */
+/** Normalized list page (adapter maps v2 `{users,...}` → `items`). */
 export interface UserListPage {
   items: AdminUser[] | null
   total: number

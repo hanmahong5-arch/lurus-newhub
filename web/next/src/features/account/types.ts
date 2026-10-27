@@ -54,7 +54,7 @@ export interface UserSettings {
   record_ip_log?: boolean
 }
 
-/** PUT /api/user/setting body (handler.UpdateUserSettingRequest). */
+/** PUT /api/v2/~/user/setting body (handler.UpdateUserSettingRequest). */
 export interface UpdateUserSettingBody {
   notify_type: NotifyType
   /** Internal quota units. */
@@ -70,20 +70,20 @@ export interface UpdateUserSettingBody {
   record_ip_log: boolean
 }
 
-/** GET /api/user/totp/status. */
+/** GET /api/v2/~/user/totp/status. */
 export interface TotpStatus {
   enrolled: boolean
   pending: boolean
   backup_codes_remaining: number
 }
 
-/** POST /api/user/totp/enroll. */
+/** POST /api/v2/~/user/totp/enroll. */
 export interface TotpEnrollment {
   secret: string
   otpauth_url: string
 }
 
-/** POST /api/user/totp/confirm and /backup-codes/regenerate. */
+/** POST /api/v2/~/user/totp/confirm and /backup-codes/regenerate. */
 export interface BackupCodes {
   backup_codes: string[]
 }

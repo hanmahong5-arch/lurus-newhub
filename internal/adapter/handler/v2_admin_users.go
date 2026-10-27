@@ -37,6 +37,7 @@ type adminUserView struct {
 	Quota        int    `json:"quota"`
 	UsedQuota    int    `json:"used_quota"`
 	RequestCount int    `json:"request_count"`
+	Remark       string `json:"remark,omitempty"`
 }
 
 func toAdminUserViews(users []*repo.User) []adminUserView {
@@ -53,6 +54,7 @@ func toAdminUserViews(users []*repo.User) []adminUserView {
 			Quota:        u.Quota,
 			UsedQuota:    u.UsedQuota,
 			RequestCount: u.RequestCount,
+			Remark:       u.Remark,
 		})
 	}
 	return items
@@ -77,6 +79,37 @@ func requireRoot(c *gin.Context) (int, bool) {
 		return role, false
 	}
 	return role, true
+}
+
+// GetAdminUserV2 returns one user by id for the admin edit drawer.
+// Route: GET /api/v2/admin/users/:id
+func GetAdminUserV2(c *gin.Context) {
+	if _, ok := requireRoot(c); !ok {
+		return
+	}
+	userID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid user ID"})
+		return
+	}
+	user, err := repo.GetUserById(userID, false)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "User not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    toAdminUserViews([]*repo.User{user})[0],
+	})
+}
+
+// ListAdminGroupsV2 returns group-ratio table names for admin user filters.
+// Route: GET /api/v2/admin/groups
+func ListAdminGroupsV2(c *gin.Context) {
+	if _, ok := requireRoot(c); !ok {
+		return
+	}
+	GetGroups(c)
 }
 
 // ListAdminUsersV2 lists users with keyword/group/status filters + pagination.
@@ -144,12 +177,14 @@ func UpdateAdminUserV2(c *gin.Context) {
 		return
 	}
 
-	// nil = leave unchanged. Only these four fields are mutable here.
+	// nil = leave unchanged. Role/status/quota/group plus console profile fields.
 	var req struct {
-		Role   *int    `json:"role"`
-		Status *int    `json:"status"`
-		Quota  *int    `json:"quota"`
-		Group  *string `json:"group"`
+		Role        *int    `json:"role"`
+		Status      *int    `json:"status"`
+		Quota       *int    `json:"quota"`
+		Group       *string `json:"group"`
+		DisplayName *string `json:"display_name"`
+		Remark      *string `json:"remark"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid request parameters", "error": err.Error()})
@@ -210,6 +245,26 @@ func UpdateAdminUserV2(c *gin.Context) {
 		common.SysError("Failed to update user: " + err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to update user"})
 		return
+	}
+	if req.DisplayName != nil || req.Remark != nil {
+		profile := map[string]any{}
+		if req.DisplayName != nil {
+			profile["display_name"] = *req.DisplayName
+		}
+		if req.Remark != nil {
+			profile["remark"] = *req.Remark
+		}
+		if err := repo.AdminPatchUserProfile(userID, profile); err != nil {
+			common.SysError("Failed to update user profile: " + err.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to update user profile"})
+			return
+		}
+		refreshed, getErr := repo.GetUserById(userID, false)
+		if getErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to reload user"})
+			return
+		}
+		updated = refreshed
 	}
 
 	// Audit: role changes and quota adjustments are separately attributable.

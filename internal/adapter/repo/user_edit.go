@@ -1,5 +1,11 @@
 package repo
 
+import (
+	"errors"
+
+	"github.com/LurusTech/lurus-hub/internal/pkg/common"
+)
+
 // user_edit.go — (*User).Edit, the admin update path's write. Split out of
 // user.go by the cycle-13 wiring pass as a pure move: the method is
 // byte-identical to the one that stood in user.go. internal/pkg/gates'
@@ -60,4 +66,27 @@ func (user *User) Edit() error {
 		return err
 	}
 	return updateUserCache(*user)
+}
+
+// AdminPatchUserProfile updates optional console profile fields (display_name,
+// remark) for a platform-admin user edit. keys must be column names already
+// validated by the handler; empty map is a no-op.
+func AdminPatchUserProfile(id int, fields map[string]any) error {
+	if id == 0 {
+		return errors.New("id 为空！")
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	if err := GetSystemDB().Model(&User{}).Where("id = ?", id).Updates(fields).Error; err != nil {
+		return err
+	}
+	var user User
+	if err := GetSystemDB().First(&user, "id = ?", id).Error; err != nil {
+		return err
+	}
+	if err := updateUserCache(user); err != nil {
+		common.SysLog("admin patch user profile cache refresh failed: " + err.Error())
+	}
+	return nil
 }

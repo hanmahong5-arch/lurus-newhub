@@ -63,7 +63,7 @@ export const channelsQueryOptions = queryOptions({
   queryFn: async (): Promise<OpenRouterChannel[]> => {
     const data = await api.get<
       { items?: OpenRouterChannel[] | null } | OpenRouterChannel[] | null
-    >('/api/channel/', {
+    >('/api/v2/admin/channels', {
       params: { p: 1, page_size: 200, type: OPENROUTER_CHANNEL_TYPE },
     })
     const list = Array.isArray(data) ? data : (data?.items ?? [])

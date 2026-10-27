@@ -113,7 +113,7 @@ function route(over: Handlers = {}) {
     '/api/openrouter-sync/jobs': [job()],
     '/api/openrouter-sync/categories': CATEGORIES,
     '/api/openrouter-sync/api-pool': POOL,
-    '/api/channel/': {
+    '/api/v2/admin/channels': {
       items: [
         { id: 3, name: 'or-main', type: 20 },
         { id: 4, name: 'not-openrouter', type: 1 },
@@ -283,7 +283,7 @@ describe('job list', () => {
   it('asks only for OpenRouter channels and drops any other type', async () => {
     renderPage()
     await loaded()
-    expect(get).toHaveBeenCalledWith('/api/channel/', {
+    expect(get).toHaveBeenCalledWith('/api/v2/admin/channels', {
       params: { p: 1, page_size: 200, type: 20 },
     })
   })
