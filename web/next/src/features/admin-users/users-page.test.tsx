@@ -108,12 +108,19 @@ function pageOf(items: unknown[]) {
 /** Route api.get by URL; unknown URLs answer an empty list. */
 function serve(handlers: Record<string, unknown>) {
   apiGet.mockImplementation((url: string) => {
-    if (url === '/api/status') return Promise.resolve(STATUS)
-    if (url === '/api/v2/admin/groups')
+    if (url === '/api/status') {
+      return Promise.resolve(STATUS)
+    }
+    if (url === '/api/v2/admin/groups') {
       return Promise.resolve(['default', 'vip'])
+    }
     const v = handlers[url]
-    if (v instanceof Error) return Promise.reject(v)
-    if (v === undefined) return Promise.resolve(pageOf([]))
+    if (v instanceof Error) {
+      return Promise.reject(v)
+    }
+    if (v === undefined) {
+      return Promise.resolve(pageOf([]))
+    }
     return Promise.resolve(v)
   })
 }
