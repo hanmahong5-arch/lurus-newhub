@@ -26,8 +26,9 @@ import (
 // ============================================================================
 
 // TestListAdminUsersV2_Whitelist proves the list endpoint never leaks secret /
-// internal columns (access_token, setting, remark, tenant_id, lurus_account_id),
-// only the curated whitelist.
+// internal columns (access_token, setting, tenant_id, lurus_account_id),
+// only the curated whitelist. remark is intentional — the admin edit drawer
+// reads it from the same view as list/get.
 func TestListAdminUsersV2_Whitelist(t *testing.T) {
 	ctx := SetupV2TestRouter(t)
 	defer ctx.Cleanup()
@@ -49,9 +50,10 @@ func TestListAdminUsersV2_Whitelist(t *testing.T) {
 	if len(users) == 0 {
 		t.Fatal("expected at least one user in the admin list")
 	}
+	sawRemark := false
 	for _, raw := range users {
 		u := raw.(map[string]interface{})
-		for _, f := range []string{"access_token", "setting", "remark", "tenant_id", "lurus_account_id", "DeletedAt"} {
+		for _, f := range []string{"access_token", "setting", "tenant_id", "lurus_account_id", "DeletedAt"} {
 			if _, exists := u[f]; exists {
 				t.Errorf("forbidden field %q leaked through adminUserView", f)
 			}
@@ -60,6 +62,12 @@ func TestListAdminUsersV2_Whitelist(t *testing.T) {
 		if _, ok := u["username"]; !ok {
 			t.Error("expected username field in adminUserView")
 		}
+		if r, ok := u["remark"].(string); ok && r == "internal note" {
+			sawRemark = true
+		}
+	}
+	if !sawRemark {
+		t.Error("expected seeded remark to appear in adminUserView (admin console edit)")
 	}
 }
 

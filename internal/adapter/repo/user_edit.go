@@ -73,7 +73,7 @@ func (user *User) Edit() error {
 // validated by the handler; empty map is a no-op.
 func AdminPatchUserProfile(id int, fields map[string]any) error {
 	if id == 0 {
-		return errors.New("id 为空！")
+		return errors.New("user id is empty")
 	}
 	if len(fields) == 0 {
 		return nil

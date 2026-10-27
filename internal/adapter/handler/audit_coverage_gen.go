@@ -129,6 +129,16 @@ var AuditExplicitRoutes = map[string]bool{
 	"PUT /api/api-keys/:id/toggle": true,
 	"POST /api/channel/:id/key":    true,
 	"DELETE /api/log/":             true,
+
+	// Platform-staff channel facade (/api/v2/admin/channels) — same handlers
+	// as v1 /api/channel that already call governance.RecordAuditEvent.
+	"POST /api/v2/admin/channels":              true, // AddChannel
+	"PUT /api/v2/admin/channels":               true, // UpdateChannel
+	"DELETE /api/v2/admin/channels/:id":        true, // DeleteChannel
+	"POST /api/v2/admin/channels/batch":        true, // DeleteChannelBatch
+	"POST /api/v2/admin/channels/tag/disabled": true, // DisableTagChannels
+	"PUT /api/v2/admin/channels/tag":           true, // EditTagChannels
+	"POST /api/v2/admin/channels/:id/key":      true, // GetChannelKey
 }
 
 // isMutatingWriteMethod reports whether method is one AuditWriteGuard treats

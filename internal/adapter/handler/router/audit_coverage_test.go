@@ -59,7 +59,25 @@ import (
 // the actual request, not the source); this test proves only "the handler
 // somewhere calls governance.NewAuditEvent/RecordAuditEvent", not "every
 // branch does".
-var knownFallbackRoutes = map[string]string{}
+var knownFallbackRoutes = map[string]string{
+	// Thin /api/v2/admin/channels facade reuses v1 channel handlers that
+	// never called governance.RecordAuditEvent; AuditWriteGuard records the
+	// typed admin.write_unaudited fallback. Explicit audit for these is a
+	// follow-up on the channel.go handlers themselves, not this facade.
+	"POST /api/v2/admin/channels/tag/enabled":        "AuditWriteGuard fallback; EnableTagChannels has no explicit RecordAuditEvent (same as v1 /api/channel/tag/enabled)",
+	"POST /api/v2/admin/channels/batch/tag":          "AuditWriteGuard fallback; BatchSetChannelTag has no explicit RecordAuditEvent",
+	"POST /api/v2/admin/channels/fix":                "AuditWriteGuard fallback; FixChannelsAbilities has no explicit RecordAuditEvent",
+	"POST /api/v2/admin/channels/fetch_models":       "AuditWriteGuard fallback; FetchModels has no explicit RecordAuditEvent",
+	"POST /api/v2/admin/channels/ollama/pull":        "AuditWriteGuard fallback; OllamaPullModel has no explicit RecordAuditEvent",
+	"POST /api/v2/admin/channels/ollama/pull/stream": "AuditWriteGuard fallback; OllamaPullModelStream has no explicit RecordAuditEvent",
+	"POST /api/v2/admin/channels/copy/:id":           "AuditWriteGuard fallback; CopyChannel has no explicit RecordAuditEvent",
+	"POST /api/v2/admin/channels/multi_key/manage":   "AuditWriteGuard fallback; ManageMultiKeys has no explicit RecordAuditEvent",
+	"DELETE /api/v2/admin/channels/disabled":         "AuditWriteGuard fallback; DeleteDisabledChannel has no explicit RecordAuditEvent",
+	"DELETE /api/v2/admin/channels/ollama/delete":    "AuditWriteGuard fallback; OllamaDeleteModel has no explicit RecordAuditEvent",
+	"POST /api/v2/admin/prefill-groups":              "AuditWriteGuard fallback; CreatePrefillGroup has no explicit RecordAuditEvent",
+	"PUT /api/v2/admin/prefill-groups":               "AuditWriteGuard fallback; UpdatePrefillGroup has no explicit RecordAuditEvent",
+	"DELETE /api/v2/admin/prefill-groups/:id":        "AuditWriteGuard fallback; DeletePrefillGroup has no explicit RecordAuditEvent",
+}
 
 // moneyRouteDenyList is a small, explicit list of routes that move or gate a
 // real wallet-backed balance. knownFallbackRoutes must never contain one of

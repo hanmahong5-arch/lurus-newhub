@@ -53,6 +53,7 @@ var userFacingProjections = map[string]string{
 	"PUT /api/user/setting":       "/api/user/setting",
 	"GET /api/user/self":          "/api/user/self",
 	"GET /api/channel/":           "/api/channel",
+	"admin channels (v2)":         "/admin/channels",
 	"GET /api/token/":             "/api/token",
 	"GET /api/log/self":           "/api/log/self",
 	"GET /api/redemption/":        "/api/redemption",
@@ -117,6 +118,11 @@ var noConsoleConsumer = map[string]string{
 	// stays registered for scripted clients during deprecation Phase 1.
 	"PUT /api/user/setting": "superseded in the console by PUT /api/v2/account/setting; " +
 		"kept as a v1 API surface for scripted clients during REST /api deprecation Phase 1",
+	// Ops-channels console moved to GET /api/v2/admin/channels (AdminJWTAuth
+	// facade). v1 listing stays registered with Deprecation/Sunset headers
+	// for scripted clients until the Sunset window closes.
+	"GET /api/channel/": "superseded in the console by GET /api/v2/admin/channels " +
+		"(features/ops-channels); kept as a deprecated v1 API surface for scripted clients",
 }
 
 // consumedBy reports whether some URL in corpus (one per line) contains needle
