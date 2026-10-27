@@ -67,11 +67,14 @@ test.describe('smoke - bridge login + key create/list/delete (UI)', () => {
     await page.getByRole('button', { name: 'Delete', exact: true }).click()
 
     await expect(keyRow(page, keyName)).toHaveCount(0, { timeout: 15_000 })
-    const after = await listKeys(page)
-    expect(
-      after.some((k) => k.name === keyName),
-      'deleted key is gone from the API list',
-    ).toBe(false)
+    // UI row can clear a tick before the list API reflects the delete
+    // (TanStack refetch / multi-replica lag). Poll the API, don't one-shot.
+    await expect
+      .poll(
+        async () => (await listKeys(page)).some((k) => k.name === keyName),
+        { timeout: 15_000 },
+      )
+      .toBe(false)
   })
 
   test.afterEach(async ({ page }) => {

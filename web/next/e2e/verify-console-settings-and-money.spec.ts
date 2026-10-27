@@ -395,6 +395,14 @@ test.describe('money on screen', () => {
     })
     await expect(value('kpi-balance')).toBeVisible({ timeout: 20_000 })
     await expect(value('kpi-spent')).toBeVisible()
+    // KPI mounts with "--" until /user/self settles (same race wallet already
+    // polls for). Wait out the placeholder before reading amounts.
+    await expect(value('kpi-balance')).not.toHaveText('--', {
+      timeout: 20_000,
+    })
+    await expect(value('kpi-spent')).not.toHaveText('--', {
+      timeout: 20_000,
+    })
     const balance = (await value('kpi-balance').innerText()).trim()
     const spent = (await value('kpi-spent').innerText()).trim()
     await expect.poll(() => self.used, { timeout: 10_000 }).toBeDefined()

@@ -264,13 +264,14 @@ jobs:
   # (the R6<->GHCR link has been the slow/flaky part historically, see
   # doc/runbook/staging-deploy.md's CDN-outage section) and roll the pods
   # before a merge is actually live. This job polls both instances' public
-  # /api/status until each reports this build's VERSION (25 min budget —
-  # generous next to a normal ArgoCD sync interval + rollout), so a stuck
-  # rollout pages the merger by email instead of waiting for someone to poll
-  # by hand. Once both are confirmed, it fires the UAT e2e suite
-  # (web-ci.yml's `e2e` job, same suite the nightly schedule runs) without
-  # blocking this runner on it, and leaves one PR comment naming the outcome
-  # + a link to the dispatched run; the e2e job itself posts a short
+  # /api/status until each reports this build's VERSION (40 min budget —
+  # ArgoCD sync + R6←GHCR pull has measured 20+ min alone on a slow day; 25
+  # min falsely red'd a pin that later landed as main-20261027-3ad2f6f). A
+  # stuck rollout still pages the merger by email instead of waiting for
+  # someone to poll by hand. Once both are confirmed, it fires the UAT e2e
+  # suite (web-ci.yml's `e2e` job, same suite the nightly schedule runs)
+  # without blocking this runner on it, and leaves one PR comment naming the
+  # outcome + a link to the dispatched run; the e2e job itself posts a short
   # pass/fail follow-up when it finishes. Every comment carries a hidden
   # `<!-- deploy-verify:VERSION -->` / `<!-- deploy-verify-e2e:VERSION -->`
   # marker so a workflow re-run updates the existing comment instead of
@@ -289,14 +290,14 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REPO: ${{ github.repository }}
     steps:
-      - name: Poll prod + UAT until both serve this VERSION (25 min timeout)
+      - name: Poll prod + UAT until both serve this VERSION (40 min timeout)
         run: |
           set -u
           PROD_URL="https://hub.lurus.cn/api/status"
           UAT_URL="https://test-newhub.lurus.cn/api/status"
           prod_ok=""; uat_ok=""
           prod_seen="<unreachable>"; uat_seen="<unreachable>"
-          deadline=$((SECONDS + 25 * 60))
+          deadline=$((SECONDS + 40 * 60))
           while [ "$SECONDS" -lt "$deadline" ] && { [ -z "$prod_ok" ] || [ -z "$uat_ok" ]; }; do
             if [ -z "$prod_ok" ]; then
               body=$(curl -fsS --max-time 10 "$PROD_URL" 2>/dev/null || true)
@@ -316,11 +317,11 @@ jobs:
           done
           fail=0
           if [ -z "$prod_ok" ]; then
-            echo "::error::prod (hub.lurus.cn) never reached ${VERSION} within 25 min — last seen '${prod_seen}'"
+            echo "::error::prod (hub.lurus.cn) never reached ${VERSION} within 40 min — last seen '${prod_seen}'"
             fail=1
           fi
           if [ -z "$uat_ok" ]; then
-            echo "::error::UAT (test-newhub.lurus.cn) never reached ${VERSION} within 25 min — last seen '${uat_seen}'"
+            echo "::error::UAT (test-newhub.lurus.cn) never reached ${VERSION} within 40 min — last seen '${uat_seen}'"
             fail=1
           fi
           exit $fail
