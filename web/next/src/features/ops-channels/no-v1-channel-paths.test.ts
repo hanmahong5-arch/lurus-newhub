@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
@@ -8,7 +9,7 @@ import { describe, expect, it } from 'vitest'
  * /api/prefill_group — the v2 admin facade is the only supported path.
  * Comments that merely mention the old surface are allowed.
  */
-const root = join(__dirname)
+const root = dirname(fileURLToPath(import.meta.url))
 const banned = [
   /['"`]\/api\/channel(?:\/|$)/,
   /['"`]\/api\/group(?:\/|$)/,
