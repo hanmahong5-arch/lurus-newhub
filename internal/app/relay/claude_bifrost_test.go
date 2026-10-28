@@ -74,7 +74,7 @@ func TestTextResponseToOpenAI(t *testing.T) {
 		Usage:   dto.Usage{PromptTokens: 1, CompletionTokens: 2, TotalTokens: 3},
 	}
 	out := textResponseToOpenAI(in)
-	if out.Id != "resp-1" || out.Model != "claude-3-5-sonnet" || out.Usage.TotalTokens != 3 {
+	if out.Id != "resp-1" || out.Model != "claude-3-5-sonnet" || out.TotalTokens != 3 {
 		t.Fatalf("round-trip mismatch: %#v", out)
 	}
 	if len(out.Choices) != 1 || out.Choices[0].FinishReason != "stop" {
