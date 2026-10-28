@@ -1,8 +1,10 @@
 package bifrosteng
 
 import (
+	"context"
 	"testing"
 
+	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 )
@@ -65,5 +67,57 @@ func TestCoverageAwsVertexOwned(t *testing.T) {
 	}
 	if CoverageOf(constant.APITypeBaidu) != CoverageDeferred {
 		t.Fatal("Baidu stays deferred")
+	}
+}
+
+func TestRegisterChannel_AwsKeys(t *testing.T) {
+	acc := NewChannelAccount()
+	awsKey, err := acc.RegisterChannel(&relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId:         11,
+			ApiType:           constant.APITypeAws,
+			ApiKey:            "AKIA|SECRET|us-east-1",
+			UpstreamModelName: "anthropic.claude-3",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := acc.GetKeysForProvider(context.Background(), awsKey)
+	if err != nil || len(keys) != 1 || keys[0].BedrockKeyConfig == nil {
+		t.Fatalf("aws keys=%+v err=%v", keys, err)
+	}
+	cfg, err := acc.GetConfigForProvider(awsKey)
+	if err != nil || cfg == nil || cfg.NetworkConfig.MaxRetries != 0 {
+		t.Fatalf("aws config=%+v err=%v", cfg, err)
+	}
+	providers, err := acc.GetConfiguredProviders()
+	if err != nil || len(providers) != 1 {
+		t.Fatalf("providers=%v err=%v", providers, err)
+	}
+}
+
+func TestRegisterChannel_VertexJSONKeys(t *testing.T) {
+	acc := NewChannelAccount()
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId:            13,
+			ApiType:              constant.APITypeVertexAi,
+			ApiKey:               `{"project_id":"p1","client_email":"a@b","private_key":"k"}`,
+			ApiVersion:           "us-central1",
+			ChannelOtherSettings: dto.ChannelOtherSettings{VertexKeyType: dto.VertexKeyTypeJSON},
+			UpstreamModelName:    "gemini-1.5-pro",
+		},
+	}
+	key, err := acc.RegisterChannel(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := acc.GetKeysForProvider(context.Background(), key)
+	if err != nil || len(keys) != 1 || keys[0].VertexKeyConfig == nil {
+		t.Fatalf("vertex keys=%+v err=%v", keys, err)
+	}
+	if keys[0].VertexKeyConfig.ProjectID.GetValue() != "p1" {
+		t.Fatalf("project=%q", keys[0].VertexKeyConfig.ProjectID.GetValue())
 	}
 }

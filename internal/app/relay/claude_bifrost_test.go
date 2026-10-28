@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	relaycommon "github.com/LurusTech/lurus-hub/internal/adapter/provider/common"
 	"github.com/LurusTech/lurus-hub/internal/app/relay/bifrosteng"
@@ -58,6 +59,50 @@ func TestTryBifrostClaude_PassThroughFallsThrough(t *testing.T) {
 	}
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
+	}
+}
+
+func TestTryBifrostClaude_UpstreamErrorIsHandled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":{"message":"boom"}}`, http.StatusBadGateway)
+	}))
+	t.Cleanup(srv.Close)
+
+	t.Setenv("RELAY_ENGINE", "bifrost")
+	t.Setenv("RELAY_BIFROST_MODES", "chat,messages")
+	bifrosteng.ResetConfigForTest()
+	if err := bifrosteng.Init(t.Context()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	t.Cleanup(bifrosteng.Shutdown)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "claude-3-5-sonnet",
+		StartTime:       time.Now(),
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId:         77,
+			ApiType:           constant.APITypeAnthropic,
+			ApiKey:            "sk-test",
+			ChannelBaseUrl:    srv.URL,
+			UpstreamModelName: "claude-3-5-sonnet",
+		},
+	}
+	req := &dto.ClaudeRequest{
+		Model:     "claude-3-5-sonnet",
+		MaxTokens: 64,
+		Messages:  []dto.ClaudeMessage{{Role: "user", Content: "hi"}},
+	}
+	handled, apiErr := tryBifrostClaude(c, info, req)
+	if !handled {
+		t.Fatal("ready bifrost + convertible Claude request must be handled")
+	}
+	if apiErr == nil {
+		t.Fatal("upstream 502 must surface as apiErr (and must not settle)")
 	}
 }
 
