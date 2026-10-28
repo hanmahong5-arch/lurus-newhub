@@ -17,7 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { LayoutDashboard, PieChart, RefreshCw } from 'lucide-react'
+import { Link } from '@tanstack/react-router'
+import { Activity, LayoutDashboard, PieChart, RefreshCw } from 'lucide-react'
 import { lazy, Suspense, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -103,9 +104,25 @@ function OverviewSection() {
   const showContent =
     panels.loading || panels.announcementsEnabled || panels.faqEnabled
 
+  const { t } = useTranslation()
+
   return (
     <div className='flex flex-col gap-4'>
       <NoticePanel />
+      <div className='flex flex-wrap items-center justify-between gap-2'>
+        <p className='text-muted-foreground text-sm'>
+          {t('Want to slice spend by model and open matching logs?')}
+        </p>
+        <Button
+          variant='outline'
+          size='sm'
+          render={<Link to='/activity' />}
+          data-testid='dashboard-explore-activity'
+        >
+          <Activity className='me-2 size-4' aria-hidden='true' />
+          {t('Explore usage')}
+        </Button>
+      </div>
       <KpiCards
         me={me.data}
         meState={loadState(me)}

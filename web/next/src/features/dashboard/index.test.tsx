@@ -38,6 +38,20 @@ vi.mock('@/lib/api', async (orig) => {
     api: { get: apiGet },
   }
 })
+vi.mock('@tanstack/react-router', () => ({
+  Link: ({
+    children,
+    to,
+    ...rest
+  }: {
+    children?: React.ReactNode
+    to: string
+  }) => (
+    <a href={typeof to === 'string' ? to : '/'} {...rest}>
+      {children}
+    </a>
+  ),
+}))
 
 const ME = {
   id: 1,

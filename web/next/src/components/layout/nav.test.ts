@@ -12,6 +12,7 @@ const ids = (user: Parameters<typeof userAccess>[0]) =>
 
 const WORKBENCH = [
   'dashboard',
+  'activity',
   'playground',
   'chat',
   'keys',

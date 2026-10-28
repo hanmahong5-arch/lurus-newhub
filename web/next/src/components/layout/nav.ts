@@ -42,6 +42,7 @@ export interface NavItem {
   /** Route path (the console owns the site root; assets stay under /next/). */
   to:
     | '/dashboard'
+    | '/activity'
     | '/playground'
     | '/keys'
     | '/usage-logs'
@@ -98,6 +99,13 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         to: '/dashboard',
         label: 'Dashboard',
         icon: LayoutDashboard,
+        requires: 'everyone',
+      },
+      {
+        id: 'activity',
+        to: '/activity',
+        label: 'Activity',
+        icon: Activity,
         requires: 'everyone',
       },
       {

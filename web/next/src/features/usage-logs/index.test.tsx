@@ -36,6 +36,10 @@ vi.mock('./api', () => ({
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }))
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => vi.fn(),
+  Link: ({ children }: { children?: React.ReactNode }) => children,
+}))
 vi.mock('@/lib/status', () => ({
   useMoneyConfig: () => ({
     quotaPerUnit: 500000,
@@ -96,7 +100,7 @@ function renderPage() {
   })
   return render(
     <QueryClientProvider client={client}>
-      <UsageLogsPage />
+      <UsageLogsPage search={{}} />
     </QueryClientProvider>
   )
 }
