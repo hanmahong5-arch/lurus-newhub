@@ -28,9 +28,10 @@ Source of truth: `deploy/k8s/r6-stage/deployment.yaml` (ArgoCD auto-sync). Never
 
 ## Soak window after ArgoCD converges
 
+- **Started**: 2026-10-28 after Publish `main-20261028-749d50e` / digest `sha256:0f3e9849…` (UAT smoke evidence in `bifrost-uat-soak.md`)
 - **Duration**: 48–72h
 - **Watch**: Admin Gateway relay-engine panel; Prometheus `lurus_gateway_relay_engine_total` / `lurus_gateway_bifrost_duration_seconds` (netdata host scrape of NodePort 30850 — nginx 404s public `/metrics`)
-- **Abort if**: bifrost `status="error"` rate dominates `ok` on mapped chat, or settlement / wallet anomalies on probe accounts
+- **Abort if**: bifrost `status="error"` rate dominates `ok` on mapped chat **with healthy upstreams**, or settlement / wallet anomalies on probe accounts. Known noise: DeepSeek channel **402 Insufficient Balance** for `lurus-app` still increments bifrost `error` — treat as upstream wallet, not engine rollback.
 
 ## Rollback
 
