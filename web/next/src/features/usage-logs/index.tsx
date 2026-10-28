@@ -17,8 +17,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import type { PaginationState, Updater } from '@tanstack/react-table'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/section-page-layout'
@@ -38,22 +39,42 @@ import {
   type LogFilters,
   type UsageLog,
 } from './lib/logs'
+import {
+  filtersFromSearch,
+  searchFromFilters,
+  type UsageLogsSearch,
+} from './lib/url-search'
 
-export function UsageLogsPage() {
+export function UsageLogsPage(props: { search: UsageLogsSearch }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const { config } = useQuota()
   const access = useUserAccess()
   // The tenant-wide scope 403s for anyone who is not a tenant admin.
   const canSeeAll = access.isTenantAdmin
 
+  const fromUrl = useMemo(
+    () => filtersFromSearch(props.search, EMPTY_FILTERS),
+    [props.search]
+  )
+
   // `draft` is what the inputs show; `applied` is what the queries ran with.
-  const [draft, setDraft] = useState<LogFilters>(EMPTY_FILTERS)
-  const [applied, setApplied] = useState<LogFilters>(EMPTY_FILTERS)
+  // URL is the shareable source (Activity drill-down / back); apply also
+  // writes local state so Search works even when navigate is a no-op in tests.
+  const [draft, setDraft] = useState<LogFilters>(fromUrl)
+  const [applied, setApplied] = useState<LogFilters>(fromUrl)
   const [pagination, setPagination] = useState<PaginationState>({
     pageIndex: 0,
     pageSize: PAGE_SIZE,
   })
   const [selected, setSelected] = useState<UsageLog | null>(null)
+
+  // Browser back / Activity deep-link: hydrate draft+applied from the URL.
+  useEffect(() => {
+    setDraft((d) => ({ ...fromUrl, tenantWide: d.tenantWide }))
+    setApplied((a) => ({ ...fromUrl, tenantWide: a.tenantWide }))
+    setPagination((p) => ({ ...p, pageIndex: 0 }))
+  }, [fromUrl])
 
   const effective: LogFilters = {
     ...applied,
@@ -77,15 +98,22 @@ export function UsageLogsPage() {
     (patch: Partial<LogFilters>) => setDraft((d) => ({ ...d, ...patch })),
     []
   )
-  const apply = () => {
-    setApplied(draft)
-    setPagination((p) => ({ ...p, pageIndex: 0 }))
-  }
-  const reset = () => {
-    const next = { ...EMPTY_FILTERS, tenantWide: effective.tenantWide }
+  const commitFilters = (next: LogFilters) => {
     setDraft(next)
     setApplied(next)
     setPagination((p) => ({ ...p, pageIndex: 0 }))
+    void navigate({
+      to: '/usage-logs',
+      search: searchFromFilters(next),
+      replace: true,
+    })
+  }
+  const apply = () => commitFilters(draft)
+  const reset = () => {
+    commitFilters({
+      ...EMPTY_FILTERS,
+      tenantWide: effective.tenantWide,
+    })
   }
   const changeScope = (tenantWide: boolean) => {
     // Another scope is another result set: back to page one, and a username

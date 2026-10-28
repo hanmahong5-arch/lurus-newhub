@@ -29,8 +29,8 @@ func TestShouldHandleChat_Gates(t *testing.T) {
 	if ShouldHandleChat(constant.APITypeOpenAI, req, true) {
 		t.Fatal("pass-through must not handle")
 	}
-	if ShouldHandleChat(constant.APITypeAws, req, false) {
-		t.Fatal("unmapped apiType must not handle")
+	if ShouldHandleChat(constant.APITypeBaidu, req, false) {
+		t.Fatal("deferred apiType must not handle")
 	}
 }
 
@@ -59,8 +59,11 @@ func TestMappingCoverage(t *testing.T) {
 	if !IsMapped(constant.APITypeOpenAI) || CoverageOf(constant.APITypeOpenAI) != CoverageOwned {
 		t.Fatal("openai should be owned")
 	}
-	if CoverageOf(constant.APITypeAws) != CoverageDeferred {
-		t.Fatal("aws deferred")
+	if CoverageOf(constant.APITypeAws) != CoverageOwned {
+		t.Fatal("aws should be owned after account extras")
+	}
+	if CoverageOf(constant.APITypeBaidu) != CoverageDeferred {
+		t.Fatal("baidu deferred")
 	}
 	if CoverageOf(99999) != CoverageLegacy {
 		t.Fatal("unknown legacy")

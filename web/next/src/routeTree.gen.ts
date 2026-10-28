@@ -26,6 +26,7 @@ import { Route as authLoginIndexRouteImport } from './routes/(auth)/login/index'
 import { Route as authLoginTenantSlugRouteImport } from './routes/(auth)/login/$tenantSlug'
 import { Route as authOauthOidcRouteImport } from './routes/(auth)/oauth/oidc'
 import { Route as AuthenticatedAccountIndexRouteImport } from './routes/_authenticated/account/index'
+import { Route as AuthenticatedActivityIndexRouteImport } from './routes/_authenticated/activity/index'
 import { Route as AuthenticatedChatIndexRouteImport } from './routes/_authenticated/chat/index'
 import { Route as AuthenticatedDashboardIndexRouteImport } from './routes/_authenticated/dashboard/index'
 import { Route as AuthenticatedKeysIndexRouteImport } from './routes/_authenticated/keys/index'
@@ -144,6 +145,12 @@ const AuthenticatedAccountIndexRoute =
   AuthenticatedAccountIndexRouteImport.update({
     id: '/account/',
     path: '/account/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedActivityIndexRoute =
+  AuthenticatedActivityIndexRouteImport.update({
+    id: '/activity/',
+    path: '/activity/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
 const AuthenticatedChatIndexRoute = AuthenticatedChatIndexRouteImport.update({
@@ -370,6 +377,7 @@ export interface FileRoutesByFullPath {
   '/pricing/$modelId': typeof PublicPricingModelIdRoute
   '/login/': typeof authLoginIndexRoute
   '/account/': typeof AuthenticatedAccountIndexRoute
+  '/activity/': typeof AuthenticatedActivityIndexRoute
   '/chat/': typeof AuthenticatedChatIndexRoute
   '/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/keys/': typeof AuthenticatedKeysIndexRoute
@@ -422,6 +430,7 @@ export interface FileRoutesByTo {
   '/pricing/$modelId': typeof PublicPricingModelIdRoute
   '/login': typeof authLoginIndexRoute
   '/account': typeof AuthenticatedAccountIndexRoute
+  '/activity': typeof AuthenticatedActivityIndexRoute
   '/chat': typeof AuthenticatedChatIndexRoute
   '/dashboard': typeof AuthenticatedDashboardIndexRoute
   '/keys': typeof AuthenticatedKeysIndexRoute
@@ -477,6 +486,7 @@ export interface FileRoutesById {
   '/_public/pricing/$modelId': typeof PublicPricingModelIdRoute
   '/(auth)/login/': typeof authLoginIndexRoute
   '/_authenticated/account/': typeof AuthenticatedAccountIndexRoute
+  '/_authenticated/activity/': typeof AuthenticatedActivityIndexRoute
   '/_authenticated/chat/': typeof AuthenticatedChatIndexRoute
   '/_authenticated/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/_authenticated/keys/': typeof AuthenticatedKeysIndexRoute
@@ -531,6 +541,7 @@ export interface FileRouteTypes {
     | '/pricing/$modelId'
     | '/login/'
     | '/account/'
+    | '/activity/'
     | '/chat/'
     | '/dashboard/'
     | '/keys/'
@@ -583,6 +594,7 @@ export interface FileRouteTypes {
     | '/pricing/$modelId'
     | '/login'
     | '/account'
+    | '/activity'
     | '/chat'
     | '/dashboard'
     | '/keys'
@@ -637,6 +649,7 @@ export interface FileRouteTypes {
     | '/_public/pricing/$modelId'
     | '/(auth)/login/'
     | '/_authenticated/account/'
+    | '/_authenticated/activity/'
     | '/_authenticated/chat/'
     | '/_authenticated/dashboard/'
     | '/_authenticated/keys/'
@@ -806,6 +819,13 @@ declare module '@tanstack/react-router' {
       path: '/account'
       fullPath: '/account/'
       preLoaderRoute: typeof AuthenticatedAccountIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/activity/': {
+      id: '/_authenticated/activity/'
+      path: '/activity'
+      fullPath: '/activity/'
+      preLoaderRoute: typeof AuthenticatedActivityIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/chat/': {
@@ -1059,6 +1079,7 @@ declare module '@tanstack/react-router' {
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedUsageLogsAuditRoute: typeof AuthenticatedUsageLogsAuditRoute
   AuthenticatedAccountIndexRoute: typeof AuthenticatedAccountIndexRoute
+  AuthenticatedActivityIndexRoute: typeof AuthenticatedActivityIndexRoute
   AuthenticatedChatIndexRoute: typeof AuthenticatedChatIndexRoute
   AuthenticatedDashboardIndexRoute: typeof AuthenticatedDashboardIndexRoute
   AuthenticatedKeysIndexRoute: typeof AuthenticatedKeysIndexRoute
@@ -1096,6 +1117,7 @@ interface AuthenticatedRouteRouteChildren {
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedUsageLogsAuditRoute: AuthenticatedUsageLogsAuditRoute,
   AuthenticatedAccountIndexRoute: AuthenticatedAccountIndexRoute,
+  AuthenticatedActivityIndexRoute: AuthenticatedActivityIndexRoute,
   AuthenticatedChatIndexRoute: AuthenticatedChatIndexRoute,
   AuthenticatedDashboardIndexRoute: AuthenticatedDashboardIndexRoute,
   AuthenticatedKeysIndexRoute: AuthenticatedKeysIndexRoute,

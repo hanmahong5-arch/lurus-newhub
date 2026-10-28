@@ -42,8 +42,10 @@ func baseProvider(apiType int) (schemas.ModelProvider, bool) {
 		return schemas.Anthropic, true
 	case constant.APITypeGemini:
 		return schemas.Gemini, true
-	// Bedrock / Vertex need IAM / project credentials beyond ApiKey+BaseURL
-	// (see account.go). Keep them on the legacy adaptor until that is modeled.
+	case constant.APITypeAws:
+		return schemas.Bedrock, true
+	case constant.APITypeVertexAi:
+		return schemas.Vertex, true
 	case constant.APITypeOllama:
 		return schemas.Ollama, true
 	case constant.APITypeCohere:
@@ -83,9 +85,8 @@ func CoverageOf(apiType int) Coverage {
 		constant.APITypeCoze,
 		constant.APITypeJimeng,
 		constant.APITypeMokaAI,
-		constant.APITypeReplicate,
-		constant.APITypeAws,
-		constant.APITypeVertexAi:
+		constant.APITypeReplicate:
+		// CN / long-tail vendors without a Bifrost baseProvider mapping.
 		return CoverageDeferred
 	default:
 		return CoverageLegacy

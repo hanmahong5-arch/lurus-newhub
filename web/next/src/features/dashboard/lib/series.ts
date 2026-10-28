@@ -183,10 +183,12 @@ export interface ChartSeries {
  * Wide rows for recharts: one point per bucket, one numeric column per kept
  * model plus a folded "other". `rank` picks which metric orders the models.
  */
+export type UsageMetric = 'quota' | 'count' | 'tokens'
+
 export function buildChartSeries(
   usage: Usage,
   granularity: TimeGranularity,
-  metric: 'quota' | 'count',
+  metric: UsageMetric,
   limit = MAX_SERIES
 ): ChartSeries {
   const ranked = blankLast(

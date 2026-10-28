@@ -52,6 +52,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// GetAdaptor returns the legacy per-vendor adaptor.
+// Soft-retire (RELAY_ENGINE=bifrost): do not add features here for ApiTypes
+// that bifrosteng.CoverageOf marks bifrost-owned — extend bifrosteng instead.
+// This path remains for deferred vendors, pass-through, and convert gaps.
 func GetAdaptor(apiType int) provider.Adaptor {
 	switch apiType {
 	case constant.APITypeAli:

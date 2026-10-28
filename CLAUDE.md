@@ -153,6 +153,7 @@ key `platform-core` 只有 `balance:write / user:delete / provisioning`，**没�
 
 ## Key Runtime Notes
 
+- **Relay engine**: `RELAY_ENGINE=bifrost|legacy` (default legacy if unset). In-process Bifrost (`internal/app/relay/bifrosteng`) owns mapped chat/embeddings/messages when modes allow; newhub Pre/PostConsume remains the sole ledger. UAT/prod manifests and soak: `doc/runbook/bifrost-uat-soak.md`, `doc/runbook/bifrost-stage-prod-flip.md`, ADR `doc/adr/bifrost-relay-engine.md`.
 - **DB 自动迁移**: 启动时 GORM 自动建表（Go 结构体驱动）+ embedded SQL migration runner（`internal/pkg/migration`，**每个 master 副本**上自动跑并由 advisory lock 串行化，`MIGRATIONS_AUTO_RUN=false` 可关）。**Baseline 契约**: `migrations/` 001–020 只记账永不执行（001–004 是 MySQL 方言）；021 起必须 PG-only + 幂等，ID 先在 root `doc/coord/migration-ledger.md` 预留
 - **PG-only (2026-06)**: `SQL_DSN` 必须 `postgres://`/`postgresql://`，否则 boot fast-fail；MySQL 与 SQLite dev fallback 已删（glebarez SQLite 仅存于 hermetic 单测 tier）
 - **渠道缓存**: Redis 存在时自动启用内存缓存，`SYNC_FREQUENCY` 控制同步周期

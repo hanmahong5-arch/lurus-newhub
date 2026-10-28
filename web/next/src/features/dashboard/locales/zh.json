@@ -126,5 +126,7 @@
   "Up": "正常",
   "Down": "不可用",
   "Degraded": "降级",
-  "Maintenance": "维护中"
+  "Maintenance": "维护中",
+  "Want to slice spend by model and open matching logs?": "想按模型切片消费并打开匹配日志？",
+  "Explore usage": "探索用量"
 }
