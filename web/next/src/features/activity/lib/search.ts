@@ -24,9 +24,10 @@ import type { UsageMetric } from '@/features/dashboard/lib/series'
 export const LOG_DATETIME_FORMAT = 'YYYY-MM-DDTHH:mm'
 
 export type ActivityTab = 'overview' | 'explore'
-export type ActivityGranularity = 'hour' | 'day'
+export type ActivityGranularity = 'hour' | 'day' | 'week'
 
-export const ACTIVITY_DAY_PRESETS = [1, 7, 29] as const
+/** Rolling windows (capped under data-export max span, same as dashboard). */
+export const ACTIVITY_DAY_PRESETS = [7, 14, 29] as const
 export type ActivityDays = (typeof ACTIVITY_DAY_PRESETS)[number]
 
 export interface ActivitySearch {
@@ -57,7 +58,7 @@ function isMetric(v: unknown): v is UsageMetric {
 }
 
 function isGranularity(v: unknown): v is ActivityGranularity {
-  return v === 'hour' || v === 'day'
+  return v === 'hour' || v === 'day' || v === 'week'
 }
 
 function isDatetimeLocal(v: string): boolean {
@@ -99,24 +100,6 @@ export function validateUsageLogsSearch(
 /** Unix seconds → usage-logs datetime-local string. */
 export function toLogDatetime(sec: number): string {
   return dayjs.unix(sec).format(LOG_DATETIME_FORMAT)
-}
-
-/**
- * Build the `/usage-logs` search object for an Activity drill-down.
- * Blank model names are omitted (logs treat empty as "any model").
- */
-export function usageLogsSearchFromDrilldown(opts: {
-  model?: string
-  startSec: number
-  endSec: number
-}): UsageLogsSearch {
-  const out: UsageLogsSearch = {
-    start: toLogDatetime(opts.startSec),
-    end: toLogDatetime(opts.endSec),
-  }
-  const model = opts.model?.trim()
-  if (model) out.model = model
-  return out
 }
 
 /** Drop undefined keys so TanStack search stays sparse. */

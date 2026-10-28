@@ -56,7 +56,7 @@ export function rankModels(
 /** Chart series for Explore (quota / count / tokens). */
 export function exploreChart(
   usage: Usage,
-  granularity: 'hour' | 'day',
+  granularity: 'hour' | 'day' | 'week',
   metric: UsageMetric
 ) {
   return buildChartSeries(usage, granularity, metric)

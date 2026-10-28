@@ -64,10 +64,8 @@ import { currentLocale } from '@/lib/locale'
 import { formatQuota, type MoneyConfig } from '@/lib/money'
 
 import { exploreChart, rankModels } from '../lib/explore'
-import {
-  usageLogsSearchFromDrilldown,
-  type ActivityGranularity,
-} from '../lib/search'
+import { usageLogsSearchFromDrilldown } from '../lib/links'
+import type { ActivityGranularity } from '../lib/search'
 
 interface ExploreTabProps {
   loading: boolean
@@ -98,6 +96,7 @@ export function ExploreTab(props: ExploreTabProps) {
   const granItems = [
     { value: 'hour', label: t('Hour') },
     { value: 'day', label: t('Day') },
+    { value: 'week', label: t('Week') },
   ]
   const selectedMetric =
     metricItems.find((x) => x.value === props.metric)?.label ?? t('Spend')
@@ -190,7 +189,9 @@ export function ExploreTab(props: ExploreTabProps) {
           items={granItems}
           value={props.granularity}
           onValueChange={(v) => {
-            if (v === 'hour' || v === 'day') props.onGranularityChange(v)
+            if (v === 'hour' || v === 'day' || v === 'week') {
+              props.onGranularityChange(v)
+            }
           }}
         >
           <SelectTrigger

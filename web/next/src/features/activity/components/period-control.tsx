@@ -27,8 +27,8 @@ import {
 } from '../lib/search'
 
 const LABELS: Record<ActivityDays, string> = {
-  1: '1 Day',
   7: '7 Days',
+  14: '14 Days',
   29: '29 Days',
 }
 

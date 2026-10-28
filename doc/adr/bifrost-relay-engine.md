@@ -31,8 +31,10 @@ Bifrost `NetworkConfig.MaxRetries = 0` and request `Fallbacks = nil`. Channel-le
 
 | Label | ApiTypes (examples) |
 |-------|---------------------|
-| `bifrost-owned` | OpenAI, OpenRouter, DeepSeek, SiliconFlow, Moonshot, xAI, Mistral, Anthropic, Gemini, Ollama, Cohere, Ali, VolcEngine, ZhipuV4, … |
-| `deferred` (legacy) | Baidu, Xunfei, Zhipu (v3), Tencent, PaLM, Dify, Jina, Cloudflare, Coze, Jimeng, MokaAI, Replicate, **Bedrock, Vertex** (ApiKey+BaseURL insufficient; IAM/project extras unmodeled in `account.go`) |
+| `bifrost-owned` | OpenAI, OpenRouter, DeepSeek, SiliconFlow, Moonshot, xAI, Mistral, Anthropic, Gemini, Ollama, Cohere, Ali, VolcEngine, ZhipuV4, **Aws (Bedrock)**, **VertexAi**, … |
+| `deferred` (legacy) | Baidu, Xunfei, Zhipu (v3), Tencent, PaLM, Dify, Jina, Cloudflare, Coze, Jimeng, MokaAI, Replicate |
+
+Bedrock/Vertex: `account.go` maps channel key shapes (`ak\|sk\|region` / `apiKey\|region`; Vertex SA JSON + `ApiVersion` region) into Bifrost `BedrockKeyConfig` / `VertexKeyConfig`. Malformed keys error on Bifrost path (outer retry may re-pick; operators should fix channel key). Traffic share of these ApiTypes is residual vs OpenAI-family — not a flip blocker.
 
 See `internal/app/relay/bifrosteng/mapping.go`.
 
@@ -41,11 +43,21 @@ See `internal/app/relay/bifrosteng/mapping.go`.
 | Mode | Status |
 |------|--------|
 | `chat` | Wired (`TextHelper` → `DispatchChat`, stream + non-stream). Convert covers text, `image_url` / `input_audio` / `file`, tool_calls, and `tools`/`tool_choice`/`stop`/`seed`/`response_format`. `video_url` and pass-through channels **fall through to legacy** (`ChatConvertible` / `ShouldHandleChat`). |
-| `embeddings` | Wired (`EmbeddingHelper` → `DispatchEmbedding`); enable via `RELAY_BIFROST_MODES=chat,embeddings` |
-| `messages` (Claude wire) | **deferred** — `ClaudeHelper` stays on legacy adaptor |
+| `embeddings` | Wired (`EmbeddingHelper` → `DispatchEmbedding`); enable via modes list |
+| `messages` (Claude wire) | Wired (`ClaudeHelper` → `tryBifrostClaude` → Bifrost chat + `ResponseOpenAI2Claude` / stream twin). Billing stays `PostClaudeConsumeQuota`. Pass-through / non-convertible → legacy |
 | images / audio | **deferred** — legacy adaptor |
 
 Failover: Bifrost `Fallbacks` left empty; newhub outer channel retry is the only failover layer (`MaxRetries=0`).
+
+## Soft retire (2026-10-28 addendum)
+
+Once `hub.lurus.cn` runs `RELAY_ENGINE=bifrost`:
+
+- **Do not** add features to legacy adaptors for ApiTypes with `CoverageOwned` — fix Bifrost convert/account instead.
+- Legacy path remains for `deferred`, pass-through, and convert gaps (`ChatConvertible` false).
+- Physical deletion of owned adaptor packages is a **later** campaign after deferred traffic is residual; keep `RELAY_ENGINE=legacy` as emergency escape.
+
+Deploy / soak / rollback: `doc/runbook/bifrost-stage-prod-flip.md`.
 
 ## Observability (admin console)
 

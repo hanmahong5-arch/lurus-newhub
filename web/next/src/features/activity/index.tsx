@@ -47,8 +47,10 @@ import {
   type ActivityTab,
 } from './lib/search'
 
+/** Match dashboard models-tab defaults: short → day, 29d → week. */
 function defaultGranularity(days: ActivityDays): ActivityGranularity {
-  return days <= 1 ? 'hour' : 'day'
+  if (days >= 29) return 'week'
+  return 'day'
 }
 
 export function ActivityPage(props: { search: ActivitySearch }) {

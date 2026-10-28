@@ -45,7 +45,7 @@ import { formatQuota, type MoneyConfig } from '@/lib/money'
 import { cn } from '@/lib/utils'
 
 import { rankModels } from '../lib/explore'
-import { usageLogsSearchFromDrilldown } from '../lib/search'
+import { usageLogsSearchFromDrilldown } from '../lib/links'
 
 import { KpiRow } from './kpi-row'
 

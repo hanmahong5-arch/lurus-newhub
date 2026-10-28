@@ -31,11 +31,8 @@ func TestUnmappedFallsBack(t *testing.T) {
 		t.Fatalf("baidu coverage=%s", CoverageOf(constant.APITypeBaidu))
 	}
 	for _, apiType := range []int{constant.APITypeAws, constant.APITypeVertexAi} {
-		if IsMapped(apiType) {
-			t.Fatalf("apiType %d must stay on legacy until account.go models IAM/project creds", apiType)
-		}
-		if CoverageOf(apiType) != CoverageDeferred {
-			t.Fatalf("apiType %d coverage=%s", apiType, CoverageOf(apiType))
+		if !IsMapped(apiType) || CoverageOf(apiType) != CoverageOwned {
+			t.Fatalf("apiType %d should be bifrost-owned (account extras modeled)", apiType)
 		}
 	}
 }
