@@ -251,8 +251,8 @@ spec:
             # cannot spend the whole process upstream concurrency budget.
             - name: RELAY_MAX_CONCURRENT_PER_TENANT
               value: "64"
-            # Bifrost UAT soak (fusion Wave 1): chat + embeddings.
-            # Stage/prod flips are separate manifests — see
+            # Bifrost UAT soak (fusion Waves 1–2): chat + embeddings + messages.
+            # Prod/stage mirrors these modes — see
             # doc/runbook/bifrost-stage-prod-flip.md. Flip back to legacy
             # if soak fails.
             - name: RELAY_ENGINE
