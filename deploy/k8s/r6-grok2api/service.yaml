@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: grok2api
+  namespace: lurus-grok2api
+  labels:
+    app: grok2api
+spec:
+  selector:
+    app: grok2api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+  type: ClusterIP

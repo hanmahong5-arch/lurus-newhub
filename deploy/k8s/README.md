@@ -1,11 +1,13 @@
 # Kubernetes 部署（lurus-newhub）
 
-本目录只有两个活体：
+本目录活体：
 
 | 路径 | 作用 |
 |------|------|
 | `r6-stage/` | **唯一的 newhub manifest**（ns `lurus-newhub`,生产域 `hub.lurus.cn`；`r6-uat/` 是独立的隔离 UAT 实例,不是这个 overlay) |
-| `argocd/` | ArgoCD Application 定义,`path: deploy/k8s/r6-stage` |
+| `r6-uat/` | 隔离 UAT overlay（ns `lurus-newhub-uat`,域 `test-newhub.lurus.cn`） |
+| `r6-grok2api/` | 可选上游：自托管 grok2api（ns `lurus-grok2api`）；产品仍只打 Hub。见 `doc/runbook/grok2api-upstream.md` |
+| `argocd/` | ArgoCD Application 定义,`path: deploy/k8s/r6-stage`（UAT Application 另见 `application-uat.yaml`） |
 
 > 2026-08-24 删除了同级的 `deployment.yaml` / `service.yaml` / `ingress.yaml` /
 > `hpa.yaml` / `pdb.yaml` / `servicemonitor.yaml` / `secrets.yaml` /

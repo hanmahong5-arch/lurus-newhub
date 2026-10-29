@@ -1,0 +1,75 @@
+# Upstream for Hub Custom channels: OpenAI-compatible Grok Build/Web/Console
+# gateway (https://github.com/chenyme/grok2api). Hub remains sole public API +
+# ledger; this pod only holds vendor account pools.
+#
+# Image: pin a digest after first pull (Do NOT leave :latest in prod long-term).
+# Persistence: hostPath /data/grok2api (R6 disk iron rule — not the root disk).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grok2api
+  namespace: lurus-grok2api
+  labels:
+    app: grok2api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grok2api
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: grok2api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+        - name: grok2api
+          image: ghcr.io/chenyme/grok2api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          volumeMounts:
+            - name: config
+              mountPath: /run/grok2api/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            - name: data
+              mountPath: /app/data
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: config
+          secret:
+            secretName: grok2api-config
+        - name: data
+          hostPath:
+            path: /data/grok2api
+            type: DirectoryOrCreate

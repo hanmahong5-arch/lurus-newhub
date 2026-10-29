@@ -4,6 +4,7 @@
 # - kube-dns for cluster DNS
 # - PG in `database` namespace
 # - lurus-system + lurus-platform (Redis, platform-core gRPC/HTTP)
+# - lurus-grok2api (chenyme/grok2api OpenAI-compat upstream; see deploy/k8s/r6-grok2api/)
 # - public 80/443 (egress to internet, excluding RFC1918)
 #
 # RELAY EGRESS MODEL (measured from a live pod 2026-08-24 — read before adding
@@ -73,6 +74,9 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: lurus-platform
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: lurus-grok2api
       ports:
         - protocol: TCP
         - protocol: UDP
