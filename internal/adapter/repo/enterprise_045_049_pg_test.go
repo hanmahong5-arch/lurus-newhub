@@ -72,7 +72,7 @@ func bootLikeProduction(t *testing.T) *sql.DB {
 	}
 	// The newest embedded migration. Bump it with every new .sql file: the
 	// check is what proves the runner reached the end of the embedded set.
-	const wantHead = "055_create_switch_teampacks"
+	const wantHead = "056_catalog_sync"
 	if head != wantHead {
 		t.Fatalf("head migration = %q, want %s", head, wantHead)
 	}

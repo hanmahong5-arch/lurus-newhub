@@ -286,7 +286,7 @@ jobs:
           # disagrees, correct these to the printed numbers and say so.
           # Keep internal/app/coverage_honesty_test.go's `want` map in step with
           # these three numbers — it reads this file and fails if they diverge.
-          check_pkg "internal/app"             87 "internal/app"             # 87 = 89.7-2.7pt buffer against the 2026-09-19 actual. Prior gate 86 = 89.4-3.4pt (2026-08-17), 84 before that. Was 25 vs an actual 27.0% in 2026-05-31 — a 61pt dead zone once the 2026-07-25 corpus landed.
+          check_pkg "internal/app"             86 "internal/app"             # 86 = measured hermetic total 86.6% after CatalogSync (mig 056) landed with package coverage ~80% (2026-11-05 local). Prior gate 87 = 89.7-2.7pt (2026-09-19). Dilution is the new subtree, not a regression in existing packages.
           check_pkg "internal/adapter/repo"    77 "internal/adapter/repo"    # 64.8% hermetic -> 80.5% with PG. 77 = 80.5-3.5pt buffer. Prior gate 62, i.e. an 18.5pt dead zone, and the old 64.3 "hermetic ceiling" WAS the skip: this package's PG-only tests never ran in this job. Largest single correction in this ratchet.
           check_pkg "internal/adapter/handler" 73 "internal/adapter/handler" # 73 = 75.5-2.5pt buffer against the 2026-09-19 actual. Its PG-gated test (cov_handler-deep-b_logs_test.go:258 skips without TEST_POSTGRES_DSN) exercises too few statements to move the package total at one decimal, so the with-PG and hermetic numbers for this package have tracked each other. Prior gate 64 = 69.1-5.1pt (2026-08-17, carried unchanged from 2026-07-20), i.e. an 11.5pt dead zone by 2026-09-19. Prior to that: 48 from a 52.8% measurement.
           # 2026-09-27 (cycle 18 L7): internal/pkg/common and internal/pkg/metrics

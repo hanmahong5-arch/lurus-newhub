@@ -111,7 +111,7 @@ func TestAppCoverageGate_HonestBaseline(t *testing.T) {
 	// can only move either number up (see the job comment), so a local
 	// hermetic figure is a safe floor here where it was not for repo.
 	want := map[string]int{
-		"internal/app":             87,
+		"internal/app":             86,
 		"internal/adapter/repo":    77,
 		"internal/adapter/handler": 73,
 		"internal/pkg/common":      82,

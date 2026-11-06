@@ -39,7 +39,7 @@ func (p *VolcengineProvider) ListModels(ctx context.Context) ([]UpstreamModel, e
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return nil, err

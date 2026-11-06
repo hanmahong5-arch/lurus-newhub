@@ -12,7 +12,10 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 )
 
-const officialRatioURL = "https://basellm.github.io/llm-metadata/api/newapi/ratio_config-v1-base.json"
+const officialRatioURLDefault = "https://basellm.github.io/llm-metadata/api/newapi/ratio_config-v1-base.json"
+
+// officialRatioURL is overridden in tests to point at an httptest.
+var officialRatioURL = officialRatioURLDefault
 
 // OfficialRatioHints fetches basellm official ratio preset and returns
 // model_ratio hints for models present in the upstream list.
@@ -30,7 +33,7 @@ func OfficialRatioHints(ctx context.Context, _ *repo.Channel, models []UpstreamM
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
 		return nil, err

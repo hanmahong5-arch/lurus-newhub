@@ -134,6 +134,9 @@ var erasureModelTypeRegistry = map[string]reflect.Type{
 	"entity.LogBody":                    reflect.TypeOf(entity.LogBody{}),
 	"entity.RoutingPolicy":              reflect.TypeOf(entity.RoutingPolicy{}),
 	"entity.SwitchTeamPack":             reflect.TypeOf(entity.SwitchTeamPack{}),
+	"entity.CatalogSyncRun":             reflect.TypeOf(entity.CatalogSyncRun{}),
+	"entity.CatalogStalePending":        reflect.TypeOf(entity.CatalogStalePending{}),
+	"entity.CatalogPriceProposal":       reflect.TypeOf(entity.CatalogPriceProposal{}),
 }
 
 // erasureCoveredModels: the cascade actively disposes of the matched field
