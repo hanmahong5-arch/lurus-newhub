@@ -53,7 +53,9 @@ concurrency:
 jobs:
   acceptance:
     name: real-chain acceptance (local stack)
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    # Pin 24.04: ubuntu-latest flipped to 26.04 and Playwright 1.60 cannot
+    # install chromium there (2026-11 CatalogSync CI). Override with CI_RUNS_ON.
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-24.04"') }}
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
