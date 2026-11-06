@@ -158,6 +158,11 @@ func TestV2IDOR_Completeness(t *testing.T) {
 			"Gated by an explicit middleware.RequireOIDCToken() on the route (api-v2-router.go) — it previously registered with no effective auth (group OptionalZitaIdentity never aborts), which let any caller burn the " +
 			"paid Tavily budget. The Lutu APP is a consumer OIDC identity (authenticates against identity.lurus.cn, no newhub tenant), so RequireOIDCToken — not TokenAuth or OIDCAuth — is the correct gate; see lutu_search_auth_test.go.",
 
+		// ---- Switch BYO Edge (ADR-027): OIDC-scoped in-memory instances, owner = idp_subject ----
+		"POST /api/v2/switch/edge/instances":       "CreateSwitchEdgeInstance stamps owner from RequireOIDCToken oidc_user_id (edgeOwnerKey); Idempotency-Key scoped per owner; partner cloud not wired (default 503 provision.partner_error). Switch desktop may lack a newhub tenant.",
+		"GET /api/v2/switch/edge/instances/:id":    "GetSwitchEdgeInstance returns 404 for other owners (same shape as missing id); in-memory store keyed by owner+id (TestCreateSwitchEdgeInstance_MockReadyOnceSecret).",
+		"DELETE /api/v2/switch/edge/instances/:id": "DeleteSwitchEdgeInstance is idempotent 204; only the owning oidc_user_id's row is removed.",
+
 		// ---- platform admin surface: RootJWTAuth-gated (single global root role, not tenant-scoped) ----
 		// Root manages every tenant/user/mapping/option/audit record by design —
 		// mirrors v1's RootAuth-gated exemption for POST /api/channel/:id/key.
