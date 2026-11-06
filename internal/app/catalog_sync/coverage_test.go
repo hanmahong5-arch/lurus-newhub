@@ -94,7 +94,7 @@ func TestProviderForChannelSupported(t *testing.T) {
 		if err != nil {
 			t.Fatalf("type %d: %v", tc.typ, err)
 		}
-		if p.Name() != tc.label && !(tc.typ == constant.ChannelTypeVolcEngine && p.Name() == "volcengine") {
+		if p.Name() != tc.label {
 			t.Fatalf("type %d name=%q want %q", tc.typ, p.Name(), tc.label)
 		}
 		// Empty BaseURL hits the constant default branch.
