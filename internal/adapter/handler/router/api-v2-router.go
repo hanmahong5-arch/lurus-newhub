@@ -524,6 +524,20 @@ func SetApiV2Router(router *gin.Engine) {
 			switchGroup.GET("/app/releases/latest", handler.GetSwitchAppRelease)
 		}
 
+		// BYO Edge provision (ADR-027). Separate from switchGroup so the
+		// raw-token TenantGate completeness scan is undisturbed. RequireOIDCToken
+		// (not OIDCAuth): Switch desktop is a consumer OIDC identity and may
+		// have no newhub tenant. Catalog falls back to embedded client data
+		// when auth/Hub is missing.
+		switchEdge := apiV2.Group("/switch/edge")
+		switchEdge.Use(middleware.RequireOIDCToken())
+		{
+			switchEdge.GET("/catalog", handler.GetSwitchEdgeCatalog)
+			switchEdge.POST("/instances", handler.CreateSwitchEdgeInstance)
+			switchEdge.GET("/instances/:id", handler.GetSwitchEdgeInstance)
+			switchEdge.DELETE("/instances/:id", handler.DeleteSwitchEdgeInstance)
+		}
+
 		// Admin-published relay recommendations for Switch clients (public,
 		// options-driven; bare-array contract, see GetRecommendedRelays).
 		apiV2.GET("/relays/recommended", handler.GetRecommendedRelays)

@@ -31,7 +31,7 @@ import (
 // repo/user_edit.go, app/quota_pool.go.
 var goSourceSizeCeilings = map[string]int{
 	"internal/adapter/handler/channel-test.go":         829,
-	"internal/adapter/handler/router/api-v2-router.go": 828, // 2026-10-27: +6 行登记 admin users GET-by-id / groups / channels 薄封装；was 822（2026-10-26 V1 Phase 1）
+	"internal/adapter/handler/router/api-v2-router.go": 842, // 2026-11-04: +14 BYO Edge /switch/edge + RequireOIDCToken (ADR-027); was 828（2026-10-27）
 	"internal/adapter/handler/channel.go":              2433,
 	"internal/adapter/handler/deployment.go":           810,
 	"internal/adapter/handler/internal_api_ext.go":     1057,
