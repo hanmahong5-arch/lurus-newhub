@@ -46,9 +46,9 @@ func Decode(opaque string) (dbID int64, ok bool) {
 	if !hmac.Equal(sum, raw[8:]) {
 		return 0, false
 	}
-	id := int64(binary.BigEndian.Uint64(raw[:8]))
-	if id <= 0 {
+	u := binary.BigEndian.Uint64(raw[:8])
+	if u == 0 || u > uint64(^uint64(0)>>1) {
 		return 0, false
 	}
-	return id, true
+	return int64(u), true
 }
