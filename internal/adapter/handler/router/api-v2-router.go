@@ -101,6 +101,12 @@ func SetApiV2Router(router *gin.Engine) {
 			apiV2.POST("/bridge/exchange", middleware.BootstrapRateLimit(), handler.BridgeExchange)
 		}
 
+		// Hub Desk device-code → sk- mint (TokenHub 0.10 Desk unlock).
+		// Unauthenticated start/poll are rate-limited; approve needs a Hub SSO session.
+		apiV2.POST("/desk/device/code", middleware.BootstrapRateLimit(), handler.StartDeskDeviceCode)
+		apiV2.POST("/desk/device/token", middleware.BootstrapRateLimit(), handler.PollDeskDeviceToken)
+		apiV2.POST("/desk/device/approve", middleware.UserAuth(), handler.ApproveDeskDeviceCode)
+
 		// Fault-injection upstream: UAT only, same env-gated construction as
 		// the bridge above — registered ONLY when FAULTSIM_TOKEN is non-empty,
 		// so in production the route does not exist at all. See faultsim.go for

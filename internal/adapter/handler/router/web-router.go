@@ -378,6 +378,9 @@ func SetWebRouter(router *gin.Engine, buildFS embed.FS, indexPage []byte) {
 // web/dist down to a single index.html, so a test that needs real hashed
 // assets cannot use web.BuildFS.
 func setWebRoutes(router *gin.Engine, distFS fs.FS, staticFS static.ServeFileSystem, indexPage []byte) {
+	// Hub Desk device-code approve page (before static/SPA catch-all).
+	router.GET("/desk-device", handler.DeskDevicePage)
+
 	router.Use(hashedAssetTransport(distFS))
 	router.Use(gzip.Gzip(gzip.DefaultCompression))
 	router.Use(middleware.Cache())
