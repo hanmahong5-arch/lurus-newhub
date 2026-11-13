@@ -703,8 +703,23 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	quota := calculateAudioQuota(quotaInfo)
 
 	totalTokens := usage.TotalTokens
+	usageUnit := "token"
+	usageQty := int64(totalTokens)
+	usageSource := "upstream"
+	audioSec := settleAudioSecond(ctx, relayInfo, audioInputTokens+audioOutTokens, groupRatio)
+	if audioSec.active {
+		quota = audioSec.quota
+		modelPrice = audioSec.modelPrice
+		usePrice = audioSec.usePrice
+		usageUnit = audioSec.usageUnit
+		usageQty = audioSec.usageQty
+		usageSource = audioSec.usageSource
+	}
+
 	var logContent string
-	if !usePrice {
+	if audioSec.active {
+		logContent = audioSec.logContent
+	} else if !usePrice {
 		logContent = fmt.Sprintf("模型倍率 %.2f，补全倍率 %.2f，音频倍率 %.2f，音频补全倍率 %.2f，分组倍率 %.2f",
 			modelRatio, completionRatio.InexactFloat64(), audioRatio.InexactFloat64(), audioCompletionRatio.InexactFloat64(), groupRatio)
 	} else {
@@ -712,13 +727,14 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	}
 
 	// record all the consume log even if quota is 0
-	if totalTokens == 0 {
+	if totalTokens == 0 && !audioSec.active {
 		// in this case, must be some error happened
 		// we cannot just return, because we may have to return the pre-consumed quota
 		quota = 0
 		logContent += fmt.Sprintf("（可能是上游超时）")
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, relayInfo.OriginModelName, relayInfo.FinalPreConsumedQuota))
+		usageSource = "unreported"
 	}
 
 	quotaDelta := quota - relayInfo.FinalPreConsumedQuota
@@ -741,7 +757,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	// note in PostClaudeConsumeQuota. Skipping a zero delta skipped the pool
 	// debit and the platform pre-auth settlement.
 	settleErr := SettleConsume(ctx, relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, "audio")
-	CommitUsedQuota(relayInfo, quota, settleErr, totalTokens != 0)
+	CommitUsedQuota(relayInfo, quota, settleErr, totalTokens != 0 || (audioSec.active && usageQty > 0))
 
 	logModel := relayInfo.OriginModelName
 	if extraContent != "" {
@@ -763,6 +779,9 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		IsStream:         relayInfo.IsStream,
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
+		UsageUnit:        usageUnit,
+		UsageQuantity:    usageQty,
+		UsageSource:      usageSource,
 	}
 	governance.EnrichLogParams(ctx, relayInfo, &logParams)
 	repo.RecordConsumeLog(ctx, relayInfo.UserId, logParams)

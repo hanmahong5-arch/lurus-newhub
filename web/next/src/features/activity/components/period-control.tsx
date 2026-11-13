@@ -27,9 +27,9 @@ import {
 } from '../lib/search'
 
 const LABELS: Record<ActivityDays, string> = {
+  1: 'Today',
   7: '7 Days',
-  14: '14 Days',
-  29: '29 Days',
+  30: '30 Days',
 }
 
 export function PeriodControl(props: {

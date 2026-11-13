@@ -7,8 +7,13 @@ import (
 )
 
 func TestCatalogUsage(t *testing.T) {
-	prev := ratio_setting.SearchUnitPrice2JSONString()
-	t.Cleanup(func() { _ = ratio_setting.UpdateSearchUnitPriceByJSONString(prev) })
+	prevSearch := ratio_setting.SearchUnitPrice2JSONString()
+	prevAudio := ratio_setting.AudioSecondPrice2JSONString()
+	t.Cleanup(func() {
+		_ = ratio_setting.UpdateSearchUnitPriceByJSONString(prevSearch)
+		_ = ratio_setting.UpdateAudioSecondPriceByJSONString(prevAudio)
+	})
+	_ = ratio_setting.UpdateAudioSecondPriceByJSONString(`{}`)
 
 	cases := []struct {
 		name      string
@@ -27,19 +32,47 @@ func TestCatalogUsage(t *testing.T) {
 			if err := ratio_setting.UpdateSearchUnitPriceByJSONString(tc.table); err != nil {
 				t.Fatal(err)
 			}
-			unit, price := catalogUsage(tc.model)
+			unit, search, audio := catalogUsage(tc.model)
 			if unit != tc.wantUnit {
 				t.Errorf("unit = %q, want %q", unit, tc.wantUnit)
 			}
+			if audio != nil {
+				t.Errorf("audio price = %v, want nil on search-unit cases", *audio)
+			}
 			switch {
-			case tc.wantPrice == nil && price != nil:
-				t.Errorf("price = %v, want nil", *price)
-			case tc.wantPrice != nil && price == nil:
+			case tc.wantPrice == nil && search != nil:
+				t.Errorf("price = %v, want nil", *search)
+			case tc.wantPrice != nil && search == nil:
 				t.Errorf("price = nil, want %v", *tc.wantPrice)
-			case tc.wantPrice != nil && *price != *tc.wantPrice:
-				t.Errorf("price = %v, want %v", *price, *tc.wantPrice)
+			case tc.wantPrice != nil && *search != *tc.wantPrice:
+				t.Errorf("price = %v, want %v", *search, *tc.wantPrice)
 			}
 		})
+	}
+}
+
+func TestCatalogUsage_AudioSecond(t *testing.T) {
+	prevSearch := ratio_setting.SearchUnitPrice2JSONString()
+	prevAudio := ratio_setting.AudioSecondPrice2JSONString()
+	t.Cleanup(func() {
+		_ = ratio_setting.UpdateSearchUnitPriceByJSONString(prevSearch)
+		_ = ratio_setting.UpdateAudioSecondPriceByJSONString(prevAudio)
+	})
+	_ = ratio_setting.UpdateSearchUnitPriceByJSONString(`{}`)
+	if err := ratio_setting.UpdateAudioSecondPriceByJSONString(`{"tts-a":0.01,"tts-free":0}`); err != nil {
+		t.Fatal(err)
+	}
+	unit, search, audio := catalogUsage("tts-a")
+	if unit != UsageUnitAudioSecond || search != nil || audio == nil || *audio != 0.01 {
+		t.Fatalf("got unit=%q search=%v audio=%v", unit, search, audio)
+	}
+	unit, _, audio = catalogUsage("tts-free")
+	if unit != UsageUnitAudioSecond || audio == nil || *audio != 0 {
+		t.Fatalf("explicit free: unit=%q audio=%v", unit, audio)
+	}
+	unit, search, audio = catalogUsage("tts-missing")
+	if unit != UsageUnitToken || search != nil || audio != nil {
+		t.Fatalf("absent: unit=%q search=%v audio=%v", unit, search, audio)
 	}
 }
 

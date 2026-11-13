@@ -219,6 +219,7 @@ func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 		}
 		fileHeaders := multiForm.File["file"]
 		totalAudioToken := 0
+		var totalDuration float64
 		for _, fileHeader := range fileHeaders {
 			file, err := fileHeader.Open()
 			if err != nil {
@@ -231,8 +232,12 @@ func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 			if err != nil {
 				return 0, fmt.Errorf("error getting audio duration: %v", err)
 			}
+			totalDuration += duration
 			// 一分钟 1000 token，与 $price / minute 对齐
 			totalAudioToken += int(math.Round(math.Ceil(duration) / 60.0 * 1000))
+		}
+		if info != nil && totalDuration > 0 {
+			info.AudioDurationSeconds = totalDuration
 		}
 		return totalAudioToken, nil
 	}

@@ -275,6 +275,23 @@ describe('buildCatalog modality and search-unit price', () => {
     ).toBe(true);
     expect(hasPrice(row({ usage_unit: 'search_unit' }))).toBe(false);
   });
+
+  it('mirrors search-unit honesty for audio_second pricing', () => {
+    expect(row({ usage_unit: 'audio_second' }).audioSecondPrice).toBeNull();
+    expect(
+      row({ usage_unit: 'audio_second', audio_second_price: 0 })
+        .audioSecondPrice,
+    ).toBe(0);
+    expect(
+      hasPrice(row({ usage_unit: 'audio_second', audio_second_price: 0 })),
+    ).toBe(true);
+    expect(hasPrice(row({ usage_unit: 'audio_second' }))).toBe(false);
+    expect(
+      priceTypeOf(
+        row({ usage_unit: 'audio_second', audio_second_price: 0.002 }),
+      ),
+    ).toBe('audio_second');
+  });
 });
 
 describe('buildCatalog facets and filters', () => {
@@ -338,6 +355,7 @@ describe('buildCatalog facets and filters', () => {
       token: 1,
       request: 1,
       search_unit: 1,
+      audio_second: 0,
       unpriced: 2,
     });
   });

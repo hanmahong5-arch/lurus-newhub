@@ -71,12 +71,59 @@ func SearchUnitPriced(info *relaycommon.RelayInfo) (float64, bool) {
 	return ratio_setting.GetSearchUnitPrice(info.OriginModelName)
 }
 
+// audioRelayMode is speech / transcription / translation — the only modes
+// AudioSecondPrice applies to.
+func audioRelayMode(mode int) bool {
+	switch mode {
+	case relayconstant.RelayModeAudioSpeech,
+		relayconstant.RelayModeAudioTranscription,
+		relayconstant.RelayModeAudioTranslation:
+		return true
+	default:
+		return false
+	}
+}
+
+// AudioSecondPriced reports whether this call is settled per audio second
+// (TokenHub 0.10): an audio relay whose model has AudioSecondPrice configured.
+func AudioSecondPriced(info *relaycommon.RelayInfo) (float64, bool) {
+	if info == nil || !audioRelayMode(info.RelayMode) {
+		return 0, false
+	}
+	return ratio_setting.GetAudioSecondPrice(info.OriginModelName)
+}
+
+// AudioBillableSeconds is ceil(measured duration), or a reverse estimate from
+// legacy audio tokens when duration was never stored. ok=false means neither
+// source produced a positive quantity.
+func AudioBillableSeconds(info *relaycommon.RelayInfo, legacyAudioTokens int) (secs int64, estimated bool, ok bool) {
+	if info != nil {
+		if s := ratio_setting.AudioBillableSeconds(info.AudioDurationSeconds); s > 0 {
+			return s, false, true
+		}
+	}
+	if s := ratio_setting.AudioSecondsFromLegacyTokens(legacyAudioTokens); s > 0 {
+		return s, true, true
+	}
+	return 0, false, false
+}
+
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (types.PriceData, error) {
 	modelPrice, usePrice := ratio_setting.GetModelPrice(info.OriginModelName, false)
 	if sup, ok := SearchUnitPriced(info); ok {
 		// Pre-consume at the exact search-unit amount through the existing
 		// per-call branch; postConsumeQuota recomputes the same figure.
 		modelPrice = sup * float64(RerankSearchUnits(info))
+		usePrice = true
+	} else if asp, ok := AudioSecondPriced(info); ok {
+		// Duration may be unknown at pre-consume (TTS). Use measured seconds
+		// when present; otherwise a 15s provisional floor — PostAudioConsumeQuota
+		// resettles against the real clip length.
+		secs := ratio_setting.AudioBillableSeconds(info.AudioDurationSeconds)
+		if secs == 0 {
+			secs = 15
+		}
+		modelPrice = asp * float64(secs)
 		usePrice = true
 	}
 

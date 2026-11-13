@@ -46,6 +46,7 @@ import {
   ModalityLabel,
   OutputPriceValue,
   PriceValue,
+  AudioSecondPriceValue,
   SearchUnitPriceValue,
 } from './price';
 import { usePriceFormatter } from './price-format';
@@ -108,6 +109,9 @@ function useModelColumns(): ColumnDef<ModelEntry>[] {
           if (e.usageUnit === 'search_unit') {
             return <SearchUnitPriceValue value={e.searchUnitPrice} />;
           }
+          if (e.usageUnit === 'audio_second') {
+            return <AudioSecondPriceValue value={e.audioSecondPrice} />;
+          }
           if (e.quotaType === 1) {
             return hasPrice(e) ? (
               `${fmt(e.perCall)} ${t('per call')}`
@@ -125,7 +129,9 @@ function useModelColumns(): ColumnDef<ModelEntry>[] {
         meta: { label: t('Output') },
         enableSorting: false,
         cell: ({ row: { original: e } }) =>
-          e.quotaType === 1 || e.usageUnit === 'search_unit' ? (
+          e.quotaType === 1 ||
+          e.usageUnit === 'search_unit' ||
+          e.usageUnit === 'audio_second' ? (
             '--'
           ) : (
             <OutputPriceValue entry={e} />

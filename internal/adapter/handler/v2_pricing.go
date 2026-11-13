@@ -98,6 +98,8 @@ func GetPricingV2(c *gin.Context) {
 		UsageUnit              string                      `json:"usage_unit,omitempty"`
 		// SearchUnitPrice: omitted = not configured, 0 = explicitly free.
 		SearchUnitPrice *float64 `json:"search_unit_price,omitempty"`
+		// AudioSecondPrice: omitted = not configured, 0 = explicitly free.
+		AudioSecondPrice *float64 `json:"audio_second_price,omitempty"`
 	}
 
 	// Build vendor id→name lookup once.
@@ -127,6 +129,7 @@ func GetPricingV2(c *gin.Context) {
 			Modality:               p.Modality,
 			UsageUnit:              p.UsageUnit,
 			SearchUnitPrice:        p.SearchUnitPrice,
+			AudioSecondPrice:       p.AudioSecondPrice,
 		}
 		if cr, ok := cacheRatios[p.ModelName]; ok {
 			item.CacheRatio = &cr

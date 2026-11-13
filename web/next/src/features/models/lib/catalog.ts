@@ -77,10 +77,11 @@ export interface PricingRow {
   supported_endpoint_types?: string[] | null;
   /** chat | embedding | rerank | decision | image | audio; absent = unknown. */
   modality?: string | null;
-  /** "search_unit" when a search-unit price exists (even 0), else "token". */
+  /** search_unit | audio_second when priced that way (even 0), else token. */
   usage_unit?: string | null;
   /** Absent/null = not configured; 0 = explicitly free. */
   search_unit_price?: number | null;
+  audio_second_price?: number | null;
 }
 
 export interface CatalogueRow {
@@ -105,7 +106,7 @@ export interface PerformanceRow {
   enough_samples?: boolean;
 }
 
-export type UsageUnit = 'token' | 'search_unit';
+export type UsageUnit = 'token' | 'search_unit' | 'audio_second';
 
 /** Modalities the server can report, in display order. */
 export const MODALITIES = [
@@ -126,6 +127,8 @@ export const priceTypeLabelKey = (p: PriceType): string => {
       return 'Per request';
     case 'search_unit':
       return 'Per search unit';
+    case 'audio_second':
+      return 'Per audio second';
     default:
       return 'Price not configured';
   }
@@ -166,6 +169,8 @@ export interface ModelEntry {
   usageUnit: UsageUnit;
   /** null = not configured (distinct from 0 = free). USD per search unit. */
   searchUnitPrice: number | null;
+  /** null = not configured (distinct from 0 = free). USD per audio second. */
+  audioSecondPrice: number | null;
   routable: boolean;
   priced: boolean;
   /** 1 = billed per call; anything else = per token. */
@@ -231,6 +236,7 @@ export function buildCatalog({
         modality: '',
         usageUnit: 'token',
         searchUnitPrice: null,
+        audioSecondPrice: null,
         routable: false,
         priced: false,
         quotaType: null,
@@ -285,9 +291,16 @@ export function buildCatalog({
     }
     addCaps(e, p.supported_endpoint_types);
     e.modality = typeof p.modality === 'string' ? p.modality : '';
-    e.usageUnit = p.usage_unit === 'search_unit' ? 'search_unit' : 'token';
+    if (p.usage_unit === 'search_unit') {
+      e.usageUnit = 'search_unit';
+    } else if (p.usage_unit === 'audio_second') {
+      e.usageUnit = 'audio_second';
+    } else {
+      e.usageUnit = 'token';
+    }
     // Absent/null stays null ("not configured"); a literal 0 stays 0 ("free").
     e.searchUnitPrice = num(p.search_unit_price);
+    e.audioSecondPrice = num(p.audio_second_price);
     e.quotaType = p.quota_type ?? 0;
     // An unpriced row derives nothing: its price fields stay null, which the
     // views render as "Unpriced".
@@ -354,6 +367,7 @@ export function perUnit(
 /** A usable price exists: a positive per-call price, or a positive input price. */
 export function hasPrice(e: ModelEntry): boolean {
   if (e.usageUnit === 'search_unit') return e.searchUnitPrice !== null;
+  if (e.usageUnit === 'audio_second') return e.audioSecondPrice !== null;
   if (e.quotaType === 1) return (e.perCall ?? 0) > 0;
   return (e.inputPerM ?? 0) > 0;
 }
@@ -385,18 +399,25 @@ export function capabilityFacets(entries: ModelEntry[]) {
 }
 
 /** How a model is billed, as the sidebar and table label it. */
-export type PriceType = 'token' | 'request' | 'search_unit' | 'unpriced';
+export type PriceType =
+  | 'token'
+  | 'request'
+  | 'search_unit'
+  | 'audio_second'
+  | 'unpriced';
 
 export const PRICE_TYPES: readonly PriceType[] = [
   'token',
   'request',
   'search_unit',
+  'audio_second',
   'unpriced',
 ];
 
-/** Search-unit models are their own kind; a model without a usable price is unpriced. */
+/** Search-unit / audio-second models are their own kind; unpriced stays separate. */
 export function priceTypeOf(e: ModelEntry): PriceType {
   if (e.usageUnit === 'search_unit') return 'search_unit';
+  if (e.usageUnit === 'audio_second') return 'audio_second';
   if (!hasPrice(e)) return 'unpriced';
   return e.quotaType === 1 ? 'request' : 'token';
 }
@@ -432,6 +453,7 @@ export function priceTypeCounts(entries: ModelEntry[]) {
     token: 0,
     request: 0,
     search_unit: 0,
+    audio_second: 0,
     unpriced: 0,
   };
   for (const e of entries) counts[priceTypeOf(e)]++;

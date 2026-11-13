@@ -79,9 +79,12 @@ func (t *TaskResponse[T]) IsSuccess() bool {
 }
 
 type TaskDto struct {
-	TaskID     string          `json:"task_id"` // 第三方id，不一定有/ song id\ Task id
-	Action     string          `json:"action"`  // 任务类型, song, lyrics, description-mode
-	Status     string          `json:"status"`  // 任务状态, submitted, queueing, processing, success, failed
+	TaskID string `json:"task_id"` // 第三方id，不一定有/ song id\ Task id
+	// OpaqueID is a Hub-issued handle for GET /v1/tasks/{opaque_id}
+	// (TokenHub 0.10). Empty when the row has no primary key yet.
+	OpaqueID   string          `json:"opaque_id,omitempty"`
+	Action     string          `json:"action"` // 任务类型, song, lyrics, description-mode
+	Status     string          `json:"status"` // 任务状态, submitted, queueing, processing, success, failed
 	FailReason string          `json:"fail_reason"`
 	SubmitTime int64           `json:"submit_time"`
 	StartTime  int64           `json:"start_time"`

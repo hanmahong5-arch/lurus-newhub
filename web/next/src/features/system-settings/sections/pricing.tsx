@@ -55,7 +55,7 @@ type PricingTab = 'models' | 'sync' | 'json'
 const SCALAR_KEYS = new Set(['ExposeRatioEnabled', 'ModelFallbackMarkup'])
 
 function jsonMap(
-  key: PricingKey | 'SearchUnitPrice',
+  key: PricingKey | 'SearchUnitPrice' | 'AudioSecondPrice',
   label: string,
   description: string
 ): OptionField {
@@ -125,7 +125,12 @@ const PRICING_FIELDS: OptionField[] = [
   jsonMap(
     'SearchUnitPrice',
     'Search unit price',
-    'JSON map of search tool to USD price per unit.'
+    'JSON map of search tool to USD price per unit. Missing key falls back to token billing; 0 means free.'
+  ),
+  jsonMap(
+    'AudioSecondPrice',
+    'Audio second price',
+    'JSON map of speech/transcription model to USD price per ceil(second). Missing key falls back to token billing; 0 means free.'
   ),
   {
     kind: 'json',

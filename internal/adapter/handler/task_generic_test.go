@@ -29,6 +29,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/system_setting"
+	"github.com/LurusTech/lurus-hub/internal/pkg/taskopaque"
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -156,6 +157,7 @@ func setupTaskGenericRouter(t *testing.T, upstream http.HandlerFunc) *taskGeneri
 		middleware.RelayConcurrencyLimit(),
 	)
 	taskGroup.POST("/:platform", middleware.Distribute(), TaskChannelPlatformGuard(), RelayTask)
+	taskGroup.GET("/:platform", GetTaskOpaque)
 	taskGroup.GET("/:platform/:task_id", GetTaskGeneric)
 
 	ctx := &taskGenericCtx{router: router, db: db, user: user, token: token, channel: channel, upstream: srv}
@@ -464,6 +466,51 @@ func TestTaskGeneric_StatusWrongPlatform404(t *testing.T) {
 	const want = `{"error":{"message":"Task not found","type":"invalid_request_error"}}`
 	if w.Body.String() != want {
 		t.Errorf("body = %s, want %s", w.Body.String(), want)
+	}
+}
+
+func TestTaskOpaque_Owner200AndForeign404(t *testing.T) {
+	prev := common.CryptoSecret
+	common.CryptoSecret = "opaque-test-secret"
+	t.Cleanup(func() { common.CryptoSecret = prev })
+
+	ctx := setupTaskGenericRouter(t, sunoSubmitEchoUpstream)
+	task := &repo.Task{
+		TaskID: "opaque-owned-1", Platform: constant.TaskPlatformSuno,
+		UserId: ctx.user.Id, Status: repo.TaskStatusSuccess, SubmitTime: time.Now().Unix(),
+	}
+	if err := ctx.db.Create(task).Error; err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	opaque := taskopaque.Encode(task.ID)
+	if opaque == "" {
+		t.Fatal("empty opaque")
+	}
+
+	w := httptest.NewRecorder()
+	ctx.router.ServeHTTP(w, ctx.authedRequest(http.MethodGet, "/v1/tasks/"+opaque, ""))
+	if w.Code != http.StatusOK {
+		t.Fatalf("owner status = %d body=%s", w.Code, w.Body.String())
+	}
+	var env apiSuccessEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if env.Data.TaskID != "opaque-owned-1" {
+		t.Fatalf("task_id = %q", env.Data.TaskID)
+	}
+
+	foreign := &repo.Task{
+		TaskID: "opaque-foreign-1", Platform: constant.TaskPlatformSuno,
+		UserId: ctx.user.Id + 999, Status: repo.TaskStatusSuccess, SubmitTime: time.Now().Unix(),
+	}
+	if err := ctx.db.Create(foreign).Error; err != nil {
+		t.Fatalf("seed foreign: %v", err)
+	}
+	w2 := httptest.NewRecorder()
+	ctx.router.ServeHTTP(w2, ctx.authedRequest(http.MethodGet, "/v1/tasks/"+taskopaque.Encode(foreign.ID), ""))
+	if w2.Code != http.StatusNotFound {
+		t.Fatalf("foreign status = %d, want 404", w2.Code)
 	}
 }
 

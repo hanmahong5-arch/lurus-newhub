@@ -20,6 +20,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/setting/ratio_setting"
+	"github.com/LurusTech/lurus-hub/internal/pkg/taskopaque"
 
 	"github.com/gin-gonic/gin"
 )
@@ -628,7 +629,7 @@ func extractMusicDataFromSunoResponse(resp *dto.MusicFetchResponse, data map[str
 }
 
 func TaskModel2Dto(task *repo.Task) *dto.TaskDto {
-	return &dto.TaskDto{
+	out := &dto.TaskDto{
 		TaskID:     task.TaskID,
 		Action:     task.Action,
 		Status:     string(task.Status),
@@ -639,4 +640,8 @@ func TaskModel2Dto(task *repo.Task) *dto.TaskDto {
 		Progress:   task.Progress,
 		Data:       task.Data,
 	}
+	if task.ID > 0 {
+		out.OpaqueID = taskopaque.Encode(task.ID)
+	}
+	return out
 }

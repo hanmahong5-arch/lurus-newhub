@@ -26,6 +26,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
 	"github.com/LurusTech/lurus-hub/internal/app/relay"
@@ -33,6 +34,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
 	"github.com/LurusTech/lurus-hub/internal/pkg/logger"
+	"github.com/LurusTech/lurus-hub/internal/pkg/taskopaque"
 	"github.com/LurusTech/lurus-hub/internal/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -170,6 +172,12 @@ func respondTaskNotFound(c *gin.Context) {
 func TaskPlatformGuard() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		name := c.Param("platform")
+		// Opaque GET /v1/tasks/tht_… shares the :platform wildcard with POST;
+		// skip platform-name validation so GetTaskOpaque can decode it.
+		if c.Request.Method == http.MethodGet && strings.HasPrefix(name, "tht_") {
+			c.Next()
+			return
+		}
 		key, ok := resolveGenericTaskPlatform(name)
 		if !ok {
 			abortTaskPlatformUnknown(c, name)
@@ -275,6 +283,39 @@ func GetTaskGeneric(c *gin.Context) {
 	common.ApiSuccess(c, genericTaskStatusResponse{
 		TaskDto:   relay.TaskModel2Dto(task),
 		Platform:  name,
+		ProjectId: task.ProjectId,
+		RequestId: task.RequestId,
+	})
+}
+
+// GetTaskOpaque is GET /v1/tasks/:platform when :platform is a Hub-issued
+// opaque handle tht_… (TokenHub 0.10). Gin forces the same wildcard name as
+// POST /:platform. Vendor task ids keep using GET /v1/tasks/:platform/:task_id.
+// Ownership is the same 404-not-403 posture as GetTaskGeneric.
+func GetTaskOpaque(c *gin.Context) {
+	opaque := c.Param("platform")
+	dbID, ok := taskopaque.Decode(opaque)
+	if !ok {
+		respondTaskNotFound(c)
+		return
+	}
+	requesterID := c.GetInt("id")
+	task, exists, err := repo.GetOwnedTaskByID(requesterID, dbID)
+	if err != nil {
+		logger.LogError(c.Request.Context(), "GetTaskOpaque: query task failed: "+err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{"type": "server_error", "message": "Failed to query task"},
+		})
+		return
+	}
+	if !exists || task == nil {
+		respondTaskNotFound(c)
+		return
+	}
+	platform := string(task.Platform)
+	common.ApiSuccess(c, genericTaskStatusResponse{
+		TaskDto:   relay.TaskModel2Dto(task),
+		Platform:  platform,
 		ProjectId: task.ProjectId,
 		RequestId: task.RequestId,
 	})

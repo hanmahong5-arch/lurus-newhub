@@ -183,9 +183,13 @@ type RelayInfo struct {
 	InputAudioFormat   string
 	OutputAudioFormat  string
 	RealtimeTools      []dto.RealTimeTool
-	IsFirstRequest     bool
-	AudioUsage         bool
-	ReasoningEffort    string
+	IsFirstRequest bool
+	AudioUsage     bool
+	// AudioDurationSeconds is measured clip length for audio_second metering
+	// (TokenHub 0.10). 0 = unknown; settlement may reverse-estimate from
+	// legacy tokens when AudioSecondPrice is configured.
+	AudioDurationSeconds float64
+	ReasoningEffort      string
 	UserSetting        dto.UserSetting
 	UserEmail          string
 	UserQuota          int

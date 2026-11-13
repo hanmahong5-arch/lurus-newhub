@@ -103,6 +103,7 @@ func InitOptionMap() {
 	common.OptionMap["ModelRatio"] = ratio_setting.ModelRatio2JSONString()
 	common.OptionMap["ModelPrice"] = ratio_setting.ModelPrice2JSONString()
 	common.OptionMap["SearchUnitPrice"] = ratio_setting.SearchUnitPrice2JSONString()
+	common.OptionMap["AudioSecondPrice"] = ratio_setting.AudioSecondPrice2JSONString()
 	common.OptionMap["CacheRatio"] = ratio_setting.CacheRatio2JSONString()
 	common.OptionMap["ContextLengthTiers"] = ratio_setting.ContextLengthTiers2JSONString()
 	common.OptionMap["GroupRatio"] = ratio_setting.GroupRatio2JSONString()
@@ -465,6 +466,7 @@ var jsonOptionKinds = map[string]optionValueKind{
 	"CompletionRatio":            optionKindJSON,
 	"ModelPrice":                 optionKindJSON,
 	"SearchUnitPrice":            optionKindJSON,
+	"AudioSecondPrice":           optionKindJSON,
 	"CacheRatio":                 optionKindJSON,
 	"ContextLengthTiers":         optionKindJSON,
 	"ImageRatio":                 optionKindJSON,
@@ -495,6 +497,7 @@ var jsonOptionProbes = map[string]func(string) error{
 	"CompletionRatio":            jsonShape[map[string]float64],
 	"ModelPrice":                 jsonShape[map[string]float64],
 	"SearchUnitPrice":            jsonShape[map[string]float64],
+	"AudioSecondPrice":           jsonShape[map[string]float64],
 	"CacheRatio":                 jsonShape[map[string]float64],
 	"ContextLengthTiers": func(value string) error {
 		_, err := ratio_setting.ValidateContextLengthTiersJSONString(value)
@@ -715,6 +718,8 @@ func updateOptionMap(key string, value string) (err error) {
 		err = ratio_setting.UpdateModelPriceByJSONString(value)
 	case "SearchUnitPrice":
 		err = ratio_setting.UpdateSearchUnitPriceByJSONString(value)
+	case "AudioSecondPrice":
+		err = ratio_setting.UpdateAudioSecondPriceByJSONString(value)
 	case "CacheRatio":
 		err = ratio_setting.UpdateCacheRatioByJSONString(value)
 	case "ContextLengthTiers":

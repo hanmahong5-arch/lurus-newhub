@@ -20,6 +20,8 @@ func SetVideoRouter(router *gin.Engine) {
 	// docs: https://platform.openai.com/docs/api-reference/videos/create
 	{
 		videoV1Router.POST("/videos", handler.RelayTask)
+		// TokenHub 0.10 / OpenAI-shaped alias of POST /videos
+		videoV1Router.POST("/videos/generations", handler.RelayTask)
 		videoV1Router.GET("/videos/:task_id", handler.RelayTask)
 	}
 

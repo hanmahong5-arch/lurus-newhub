@@ -62,11 +62,36 @@ export function ModalityLabel(props: { modality: string }) {
   return <span>{t(modalityLabelKey(props.modality))}</span>;
 }
 
-/** Billing unit label: token or search unit. */
+/** Billing unit label: token, search unit, or audio second. */
 export function UsageUnitLabel(props: { entry: ModelEntry }) {
   const { t } = useTranslation();
-  const search = props.entry.usageUnit === 'search_unit';
-  return <span>{search ? t('Per search unit') : t('Per token')}</span>;
+  if (props.entry.usageUnit === 'search_unit') {
+    return <span>{t('Per search unit')}</span>;
+  }
+  if (props.entry.usageUnit === 'audio_second') {
+    return <span>{t('Per audio second')}</span>;
+  }
+  return <span>{t('Per token')}</span>;
+}
+
+/** Audio-second price. null/undefined = not configured; 0 = free. */
+export function AudioSecondPriceValue(props: {
+  value: number | null | undefined;
+}) {
+  const { t } = useTranslation();
+  const fmt = usePriceFormatter();
+  const v = props.value;
+  if (v === null || v === undefined || !Number.isFinite(v)) {
+    return (
+      <span className='text-muted-foreground' data-testid='audio-second-unset'>
+        {t('Not configured')}
+      </span>
+    );
+  }
+  if (v === 0) {
+    return <span data-testid='audio-second-free'>{t('Free')}</span>;
+  }
+  return <span data-testid='audio-second-price'>{fmt(v)}</span>;
 }
 
 /** Output column: an input-only model bills no output, which is not "unpriced". */
@@ -130,6 +155,16 @@ export function PriceGrid(props: { entry: ModelEntry }) {
   const e = props.entry;
   const unitLabel = unit === 'K' ? '1K' : '1M';
   const id = `model-price-${e.id}`;
+
+  if (e.usageUnit === 'audio_second') {
+    return (
+      <div className='grid gap-3' aria-labelledby={id}>
+        <PriceCell label={t('Per audio second')}>
+          <AudioSecondPriceValue value={e.audioSecondPrice} />
+        </PriceCell>
+      </div>
+    );
+  }
 
   if (e.usageUnit === 'search_unit') {
     return (

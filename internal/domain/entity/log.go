@@ -87,7 +87,7 @@ type Log struct {
 	// Other-JSON keys so analytics can GROUP BY them. '' / 0 = row written
 	// before the columns existed (token semantics). NO `index:` tag (see the
 	// note above).
-	//   UsageUnit:          token | search_unit | request
+	//   UsageUnit:          token | search_unit | audio_second | request
 	//   UsageQuantity:      units actually charged in that unit
 	//   UsageSource:        upstream | estimated | unreported
 	//   RetrievalDocuments: rerank = documents scored, embeddings = inputs embedded

@@ -104,18 +104,22 @@ func GetModelSupportEndpointTypes(model string) []constant.EndpointType {
 }
 
 const (
-	UsageUnitToken      = "token"
-	UsageUnitSearchUnit = "search_unit"
+	UsageUnitToken       = "token"
+	UsageUnitSearchUnit  = "search_unit"
+	UsageUnitAudioSecond = "audio_second"
 )
 
-// catalogUsage derives the billing unit of a model from the live
-// SearchUnitPrice table. Absent -> token with no price; present (including an
-// explicit 0, which means free) -> search_unit with that price.
-func catalogUsage(model string) (string, *float64) {
+// catalogUsage derives the billing unit of a model from the live price tables.
+// SearchUnitPrice and AudioSecondPrice both distinguish absent vs explicit 0.
+// Search unit wins when both are set (rerank models are never audio).
+func catalogUsage(model string) (unit string, searchPrice, audioPrice *float64) {
 	if price, ok := ratio_setting.GetSearchUnitPrice(model); ok {
-		return UsageUnitSearchUnit, &price
+		return UsageUnitSearchUnit, &price, nil
 	}
-	return UsageUnitToken, nil
+	if price, ok := ratio_setting.GetAudioSecondPrice(model); ok {
+		return UsageUnitAudioSecond, nil, &price
+	}
+	return UsageUnitToken, nil, nil
 }
 
 // pickModality resolves a model's catalogue modality: a valid administrator
@@ -455,7 +459,7 @@ func GetPricingForTenant(tenantID string) []Pricing {
 			continue
 		}
 		item := p
-		item.UsageUnit, item.SearchUnitPrice = catalogUsage(p.ModelName)
+		item.UsageUnit, item.SearchUnitPrice, item.AudioSecondPrice = catalogUsage(p.ModelName)
 		item.EnableGroup = groups
 		visible = append(visible, item)
 	}

@@ -24,9 +24,10 @@ describe('validateActivitySearch', () => {
     })
   })
 
-  it('accepts 14-day preset and rejects unknown metrics', () => {
-    expect(validateActivitySearch({ days: 14 })).toEqual({ days: 14 })
-    expect(validateActivitySearch({ days: 1, metric: 'latency' })).toEqual({})
+  it('accepts Today/30-day presets and rejects unknown metrics', () => {
+    expect(validateActivitySearch({ days: 1 })).toEqual({ days: 1 })
+    expect(validateActivitySearch({ days: 30 })).toEqual({ days: 30 })
+    expect(validateActivitySearch({ days: 14, metric: 'latency' })).toEqual({})
   })
 })
 
@@ -72,13 +73,13 @@ describe('sparseActivitySearch', () => {
     expect(
       sparseActivitySearch({
         tab: 'explore',
-        days: 14,
+        days: 30,
         metric: 'tokens',
         granularity: 'week',
       })
     ).toEqual({
       tab: 'explore',
-      days: 14,
+      days: 30,
       metric: 'tokens',
       granularity: 'week',
     })

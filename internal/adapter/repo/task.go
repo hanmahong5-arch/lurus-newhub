@@ -9,6 +9,7 @@ import (
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/LurusTech/lurus-hub/internal/pkg/constant"
 	"github.com/LurusTech/lurus-hub/internal/pkg/dto"
+	"github.com/LurusTech/lurus-hub/internal/pkg/taskopaque"
 
 	"github.com/gin-gonic/gin"
 )
@@ -260,6 +261,21 @@ func GetByTaskId(userId int, taskId string) (*Task, bool, error) {
 	return task, exist, err
 }
 
+// GetOwnedTaskByID loads a tasks row by primary key scoped to the requester.
+// Used by GET /v1/tasks/:opaque (TokenHub 0.10) after taskopaque.Decode.
+func GetOwnedTaskByID(userId int, id int64) (*Task, bool, error) {
+	if id <= 0 {
+		return nil, false, nil
+	}
+	var task *Task
+	err := DB.Where("user_id = ? and id = ?", userId, id).First(&task).Error
+	exist, err := RecordExist(err)
+	if err != nil {
+		return nil, false, err
+	}
+	return task, exist, err
+}
+
 func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {
 	if len(taskIds) == 0 {
 		return nil, nil
@@ -441,6 +457,9 @@ func (t *Task) ToOpenAIVideo() *dto.OpenAIVideo {
 	openAIVideo.ID = t.TaskID
 	openAIVideo.Status = t.Status.ToVideoStatus()
 	openAIVideo.Model = t.Properties.OriginModelName
+	if t.ID > 0 {
+		openAIVideo.SetMetadata("opaque_id", taskopaque.Encode(t.ID))
+	}
 	openAIVideo.SetProgressStr(t.Progress)
 	openAIVideo.CreatedAt = t.CreatedAt
 	openAIVideo.CompletedAt = t.UpdatedAt

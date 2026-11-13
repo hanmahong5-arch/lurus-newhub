@@ -26,8 +26,8 @@ export const LOG_DATETIME_FORMAT = 'YYYY-MM-DDTHH:mm'
 export type ActivityTab = 'overview' | 'explore'
 export type ActivityGranularity = 'hour' | 'day' | 'week'
 
-/** Rolling windows (capped under data-export max span, same as dashboard). */
-export const ACTIVITY_DAY_PRESETS = [7, 14, 29] as const
+/** Rolling windows aligned with TokenHub 0.10 Today / 7d / 30d chips. */
+export const ACTIVITY_DAY_PRESETS = [1, 7, 30] as const
 export type ActivityDays = (typeof ACTIVITY_DAY_PRESETS)[number]
 
 export interface ActivitySearch {

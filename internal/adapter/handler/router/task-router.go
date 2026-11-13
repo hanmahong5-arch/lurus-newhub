@@ -16,6 +16,8 @@ import (
 //	                                       /kling/v1, /v1/videos routes).
 //	GET  /v1/tasks/:platform/:task_id   — status, a plain ownership-checked
 //	                                       read (see task_generic.go).
+//	GET  /v1/tasks/:task_id             — TokenHub 0.10 opaque handle alias
+//	                                       (tht_…); TokenAuth only.
 //
 // Middleware chain mirrors relay-router.go's relaySunoRouter/
 // relayMusicRouter groups (TokenAuth, PoolBalanceCheck, CostSpikeLimit,
@@ -45,6 +47,10 @@ func SetTaskRouter(router *gin.Engine) {
 	)
 	{
 		taskRouter.POST("/:platform", middleware.Distribute(), handler.TaskChannelPlatformGuard(), handler.RelayTask)
+		// TokenHub 0.10: single-segment opaque handle. Gin requires the same
+		// wildcard name as POST /:platform; TaskPlatformGuard skips tht_…
+		// GETs so this handler can decode the Hub-issued id.
+		taskRouter.GET("/:platform", handler.GetTaskOpaque)
 		taskRouter.GET("/:platform/:task_id", handler.GetTaskGeneric)
 		// Cycle-8 L9 (tasks-plugins-02/17/19): metadata-only artefact
 		// listing and a content proxy for one artefact, generalising
