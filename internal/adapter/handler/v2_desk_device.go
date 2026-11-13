@@ -216,7 +216,7 @@ func ApproveDeskDeviceCode(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "could not bind device code"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "approved — return to Hub Desk"})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "approved; return to Hub Desk"})
 }
 
 // PollDeskDeviceToken — POST /api/v2/desk/device/token (unauthenticated).
@@ -290,30 +290,31 @@ func mintOrRotateHubDeskToken(userID int, tenantID string) (key, name string, er
 func DeskDevicePage(c *gin.Context) {
 	userCode := c.Query("user_code")
 	c.Header("Content-Type", "text/html; charset=utf-8")
+	// ASCII-only: WireMessageLanguageGate forbids non-ASCII in c.String/c.JSON.
 	c.String(http.StatusOK, `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"/><title>Hub Desk 授权</title>
+<html lang="en"><head><meta charset="utf-8"/><title>Authorize Hub Desk</title>
 <style>
 body{font-family:system-ui,sans-serif;max-width:28rem;margin:3rem auto;padding:0 1rem;line-height:1.5}
 code{background:#f4f4f5;padding:.1rem .3rem;border-radius:4px}
 button{padding:.5rem 1rem;font-size:1rem;cursor:pointer}
 .err{color:#b91c1c}.ok{color:#15803d}
 </style></head><body>
-<h1>授权 Hub Desk</h1>
-<p>确认后将签发一把 <code>sk-…</code> 令牌给本机 Hub Desk。不会把 Platform 登录态当作 /v1 Bearer。</p>
-<label>用户码 <input id="uc" value="%s" autocomplete="off" style="letter-spacing:.1em;text-transform:uppercase"/></label>
-<p><button id="go" type="button">授权</button></p>
+<h1>Authorize Hub Desk</h1>
+<p>Confirm to mint an <code>sk-...</code> key for this machine. Platform login is never used as /v1 Bearer.</p>
+<label>User code <input id="uc" value="%s" autocomplete="off" style="letter-spacing:.1em;text-transform:uppercase"/></label>
+<p><button id="go" type="button">Approve</button></p>
 <p id="msg"></p>
 <script>
 const msg=document.getElementById('msg');
 document.getElementById('go').onclick=async()=>{
-  msg.textContent='…';
+  msg.textContent='...';
   const r=await fetch('/api/v2/desk/device/approve',{method:'POST',credentials:'include',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({user_code:document.getElementById('uc').value.trim()})});
   const j=await r.json().catch(()=>({}));
-  if(r.status===401){msg.className='err';msg.textContent='请先登录 Hub，然后回到本页再点授权。';location.href='/api/v2/oauth/login?redirect='+encodeURIComponent(location.pathname+location.search);return;}
+  if(r.status===401){msg.className='err';msg.textContent='Sign in to Hub first, then return here.';location.href='/api/v2/oauth/login?redirect='+encodeURIComponent(location.pathname+location.search);return;}
   if(!r.ok||!j.success){msg.className='err';msg.textContent=j.message||('HTTP '+r.status);return;}
-  msg.className='ok';msg.textContent='已授权，请返回 Hub Desk。';
+  msg.className='ok';msg.textContent='Approved. Return to Hub Desk.';
 };
 </script></body></html>`, htmlEscape(userCode))
 }

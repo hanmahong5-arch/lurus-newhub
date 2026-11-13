@@ -152,6 +152,9 @@ func TestV2IDOR_Completeness(t *testing.T) {
 		"GET /api/v2/me/zita":              "guarded by common.ZitaClient.AuthMiddleware(); resolves the caller's own SDK identity, no resource id",
 		"POST /api/v2/auth/zita-bootstrap": "guarded by common.ZitaClient.AuthMiddleware() + BootstrapRateLimit; self-service SDK identity bootstrap, no resource id",
 		"POST /api/v2/bridge/exchange":     "registers only when E2E_BRIDGE_TOKEN is set (STAGE/CI); the bridge token itself is the credential, same class as switch/redeem",
+		"POST /api/v2/desk/device/code":    "Hub Desk device-code start: anonymous BootstrapRateLimit; device_code is the capability token, no tenant resource id",
+		"POST /api/v2/desk/device/token":   "Hub Desk device-code poll: anonymous; mints caller's own hubdesk sk after approve, no cross-tenant target",
+		"POST /api/v2/desk/device/approve": "Hub Desk device-code approve: UserAuth self-service binds the caller's own user_id to a pending code",
 
 		// ---- pure external proxy: no stored resource, no ownership concept ----
 		"POST /api/v2/lutu/search": "PostWebSearch is a stateless proxy to Tavily search keyed only by the request body's free-text query; there is no stored per-tenant resource to leak cross-tenant via an id. " +

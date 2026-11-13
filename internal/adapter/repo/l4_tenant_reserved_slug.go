@@ -58,6 +58,8 @@ var ReservedTenantSlugs = map[string]struct{}{
 	// Derived the same way as "me" above (l4_tenant_slug_shadowing_test.go
 	// pass 2, t.Setenv(E2E_BRIDGE_TOKEN)).
 	"bridge": {},
+	// POST /api/v2/desk/device/* — Hub Desk device-code → sk- mint
+	"desk": {},
 	// GET/POST /api/v2/switch/* (Switch desktop client — public routes group).
 	// The live slug="switch" tenant (created before this guard existed, kept
 	// resolving via the idempotent short-circuit — see
