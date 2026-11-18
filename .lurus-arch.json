@@ -1,0 +1,19 @@
+{
+  "max_lines": 300,
+  "max_test_lines": 500,
+  "zones": {
+    "infra": ["internal/pkg", "internal/adapter/repo", "internal/app/governance"],
+    "contracts": ["internal/domain"],
+    "features": ["internal/features"],
+    "bootstrap": ["cmd", "internal/lifecycle", "internal/adapter/handler/router"]
+  },
+  "fix_hints": {
+    "ARCH-PRI-001": "Avoid bare goroutines in handlers/usecases; route async tasks through internal/lifecycle workers.",
+    "ARCH-PRI-002": "Encapsulate DB/Redis/HTTP upstream calls inside internal/pkg or internal/adapter/repo."
+  },
+  "fix_paths": [
+    "internal/domain",
+    "internal/pkg",
+    "internal/lifecycle"
+  ]
+}
