@@ -605,53 +605,6 @@ type retryTimesConsumer struct {
 	why string
 }
 
-// retryTimesConsumers is the census. Raising RetryTimes from 0 to 2 switched on
-// every loop below at once, so every one of them needs a sentence here.
-func retryTimesConsumers() []retryTimesConsumer {
-	return []retryTimesConsumer{
-		{
-			file: "internal/adapter/handler/relay.go",
-			refs: 4,
-			why: "TWO loops, not one. Three references are RelayHandler's synchronous " +
-				"failover loop (the header `retryParam.GetRetry() <= common.RetryTimes`, " +
-				"the remaining budget handed to shouldRetry, and the same subtraction on " +
-				"the channel-selection-error branch). The FOURTH, " +
-				"`retryTimes := common.RetryTimes` in RelayTask, is the async task relay: " +
-				"at the old default of 0 its loop body never ran, and raising the budget " +
-				"switched it on. It re-SUBMITS a video / music / Suno job, which is not " +
-				"idempotent, and shouldRetryTaskRelay tests the status code before " +
-				"LocalError, so our own local 500s retry too — including " +
-				"`insert_task_failed`, which is raised AFTER adaptor.DoRequest has " +
-				"already created the job at the vendor. A retry there creates a second " +
-				"vendor job. See constants.go for why that is currently accepted and " +
-				"what would scope it.",
-		},
-		{
-			file: "internal/app/channel_select.go",
-			refs: 2,
-			why: "The selector, and the reason the attempt bound is PER GROUP. For an " +
-				"`auto`-group token with cross-group retry it compares the in-group " +
-				"retry index against the budget and, when the group is exhausted, calls " +
-				"param.SetRetry(0) + param.ResetRetryNextTry() so the outer loop starts " +
-				"a fresh budget on the next group. Any sentence of the form 'total " +
-				"upstream attempts = RetryTimes + 1 per request' is false while these " +
-				"two lines exist; TestAutoGroupRetryBudgetResetIsStillThere pins them.",
-		},
-		{
-			file: "internal/adapter/repo/option.go",
-			refs: 3,
-			why: "The options-table plumbing, not a consumer: InitOptionMap seeds " +
-				"OptionMap[\"RetryTimes\"] from the compiled value so the console shows " +
-				"what is running, and updateOptionMap's `RetryTimes` case applies a row " +
-				"through optionInt (previous value kept on a parse failure). optionInt " +
-				"accepts a NEGATIVE integer and RetryTimes is not in " +
-				"positiveRangeOptionKinds, so `RetryTimes = -1` makes RelayHandler's " +
-				"loop body never execute and every relay answers the all-breakers-open " +
-				"503 — see the warning in doc/runbook/shipped-defaults.md.",
-		},
-	}
-}
-
 // retryTimesRefRe is the census selector: the literal qualified reference.
 var retryTimesRefRe = regexp.MustCompile(`common\.RetryTimes`)
 
@@ -905,12 +858,18 @@ func TestRelayRetryBudgetArithmeticStillHolds(t *testing.T) {
 			"means something different on the decision side than on the loop side.",
 			rel, relayRetryBudgetRe.String())
 	}
-	if !relayTaskBudgetRe.MatchString(src) || !relayTaskLoopRe.MatchString(src) {
+	taskRel := "internal/adapter/handler/relay_auxiliary.go"
+	taskData, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(taskRel)))
+	if err != nil {
+		t.Fatalf("read %s: %v", taskRel, err)
+	}
+	taskSrc := string(taskData)
+	if !relayTaskBudgetRe.MatchString(taskSrc) || !relayTaskLoopRe.MatchString(taskSrc) {
 		t.Fatalf("%s: RelayTask's budget copy (%q) or its loop header (%q) is gone. That loop is the "+
 			"SECOND reader of common.RetryTimes in this file; it re-submits a non-idempotent async job, "+
 			"and it is pinned here so a change to it cannot be made while the RetryTimes justification "+
 			"in internal/pkg/common/constants.go still describes only the synchronous loop.",
-			rel, relayTaskBudgetRe.String(), relayTaskLoopRe.String())
+			taskRel, relayTaskBudgetRe.String(), relayTaskLoopRe.String())
 	}
 
 	// The band, not the number: the exact value is pinned in table 1. This is
