@@ -50,7 +50,7 @@ const switchTenantGateSink = "repo.TenantGate"
 
 // switchRouterFile is read as text, not imported: package router imports
 // package handler, so the dependency cannot go the other way.
-const switchRouterFile = "router/api-v2-router.go"
+const switchRouterFile = "router/api_v2_switch_public.go"
 
 // switchTenantGateExemptions maps a handler name to the reason it does not
 // reach repo.TenantGate. A reason is a description of the check that stands in

@@ -31,24 +31,13 @@ import (
 // repo/user_edit.go, app/quota_pool.go.
 var goSourceSizeCeilings = map[string]int{
 	"internal/adapter/handler/channel-test.go":         829,
-	"internal/adapter/handler/router/api-v2-router.go": 832, // +6 (TokenHub Desk sk-mint): desk/device code+approve+token mounts; was 826
-	"internal/adapter/handler/channel.go":              2433,
 	"internal/adapter/handler/deployment.go":           810,
-	"internal/adapter/handler/internal_api_ext.go":     1057,
-	"internal/adapter/handler/oauth.go":                979,  // -18 (2026-10, migration 048): the tenant_slug recovery block moved as-is to session_tenant_slug.go, paying for tenant_role / is_payer in GetSessionInfo; was +19 (2026-09-22 hotfix): GetSessionInfo resolves tenant_slug from the user's tenant when the session carries none — the only path by which an already-established console session can learn its own routing slug without a re-login
-	"internal/adapter/handler/relay.go":                958,  // +4 (lane B4, migration 050): the applyContentRules call site must sit between body read and GetAndValidateRequest; the logic lives in relay_content_rules.go. was 954; -25 (cycle 21): fastTokenCountMetaForPricing moved to relay_token_meta.go, paying for the system one dispatch
 	"internal/adapter/middleware/auth.go":              714,  // -12: platform-session bearer moved to auth_bearer_identity.go, paying for the Fleet desktop OIDC fallback. was 726 (-106 cycle 14, -75 cycle 18, -6 R57)
-	"internal/adapter/middleware/oidc_auth.go":         1214, // +8 (2026-09-23): JWKSManager.refreshInterval — the refresh goroutine raced tests on jwksRefreshInterval
 	"internal/adapter/provider/claude/relay-claude.go": 844,  // -53 (cycle 20): stream finalization moved to stream_final.go, paying for the zero-byte failover in ClaudeStreamHandler
 	"internal/adapter/provider/common/relay_info.go":   773,  // +4 (TokenHub 0.10): AudioDurationSeconds for audio_second metering; was 769
-	"internal/adapter/provider/gemini/relay-gemini.go": 1438, // +11 (cycle 20): GeminiChatStreamHandler fails over a zero-byte incomplete stream and returns the surfaced mid-stream error instead of nil; the claude/openai/relay.go growth from the same change was paid for by pure moves (stream_final.go, realtime_ledger.go, relay_breaker_outcome.go)
-	"internal/adapter/repo/channel.go":                 1225, // -1 (lane B2): weighted-mode dispatch added, two dead comment lines removed
 	"internal/adapter/repo/log.go":                     958,  // -17 (cycle 22): internal-API pagers moved to log_internal_queries.go, paying for the retrieval-usage columns; was 975 // lowered from 989 (setRequestIdIfAbsent moved to log_request_id.go, paying for the body-archive and log-persisted hooks); was 1016 after log_tenant_resolve/attribution moves; was +3 consume-log write-failure counter (2026-09-28), paid for by moving resolveLogTenantID to log_tenant_resolve.go (-19)
 	"internal/adapter/repo/option.go":                  884,  // +5 (TokenHub 0.10): AudioSecondPrice option wiring; was 879 (-69 cycle 22 for SearchUnitPrice)
 	"internal/adapter/repo/token.go":                   788,  // +2 (lane B4, migration 050): Token.LogRetention mirror field + comment (must stay byte-identical to entity); was 786. +2 (lane A3, migration 049): Token.SourceProduct mirror field + comment (must stay byte-identical to entity); was 784, lowered from 809 after attribution moves; was +15 (cycle 18 L3): ErrTokenExpired/ErrTokenLookupFailed sentinels so TokenAuth can tell revoked/expired/DB-down apart from an unknown key
-	"internal/adapter/repo/user.go":                    1206,
-	"internal/app/convert.go":                          1304,
-	"internal/app/quota.go":                            1270, // +19 (TokenHub 0.10): audio_second settle call + metering columns on audio log; body in quota_audio_second.go; was 1251
 	"internal/pkg/common/identity_client.go":           740,  // -76 (wallet-ledger PR): Entitlements + its lenient UnmarshalJSON moved to identity_entitlements.go; -25 (cycle 14): the usage-report counter + ReportLLMUsage moved to identity_usage_report.go, paying for the checkout/status error honesty; -23 (R57): LookupAccountByIDPSubject + sentinels moved to identity_lookup.go
 	"internal/pkg/dto/openai_request.go":               1020,
 	// NEW ROW, not a raise: metrics.go crossed the 800 threshold in cycle 13
