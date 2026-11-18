@@ -1,33 +1,19 @@
 package handler
 
 import (
-	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/LurusTech/lurus-hub/internal/adapter/repo"
-	"github.com/LurusTech/lurus-hub/internal/app"
 	"github.com/LurusTech/lurus-hub/internal/pkg/common"
 	"github.com/gin-gonic/gin"
 )
 
 var usernameRegexp = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 
-// resolveAccountByZitadelSub resolves an OIDC subject to its lurus-platform
-// account. Indirected through a package var (defaulting to the
-// budgeted HTTP resolver) so provisioning tests can stub the platform
-// dependency without a live identity service. Production keeps the default.
-// NOTE(idp-migration): the function keeps the historical GetAccountByZitadelSub
-// spelling (and the *GRPC suffix from the removed gRPC leg); it calls the
-// platform over HTTP by idp_subject. Renaming is a mechanical follow-up and
-// changes nothing on the wire.
-var resolveAccountByZitadelSub = common.GetAccountByZitadelSubGRPC
-
-// InternalLogin is no longer supported — auth is delegated to the OIDC provider.
-// POST /internal/auth/login
+// InternalLogin rejects deprecated password-based login in favor of OIDC.
 func InternalLogin(c *gin.Context) {
 	c.JSON(http.StatusGone, gin.H{
 		"success":    false,
@@ -36,10 +22,7 @@ func InternalLogin(c *gin.Context) {
 	})
 }
 
-// ===== User CRUD =====
-
-// InternalCreateUser creates a new user via the internal API.
-// POST /internal/user
+// InternalCreateUser creates a user row inside the default tenant via the internal API.
 func InternalCreateUser(c *gin.Context) {
 	var req struct {
 		Username    string `json:"username" binding:"required"`
@@ -84,18 +67,10 @@ func InternalCreateUser(c *gin.Context) {
 		return
 	}
 
-	// This endpoint's contract carries no tenant, but the GORM tenant plugin
-	// rejects INSERTs into tenant-scoped tables when the context has no tenant
-	// ("tenant_id is required for create operations" → spurious 500). Scope the
-	// whole handler to the resolved default tenant — the same default used by
-	// /internal/user/by-zitadel-sub and /internal/user/provision — so the
-	// uniqueness checks and the create all operate within one tenant.
 	defaultTenantID := repo.ResolveDefaultTenantID()
 	db := repo.GetTenantDBWithID(defaultTenantID)
 
-	// Idempotency check
-	idempotencyKey := c.GetHeader("X-Idempotency-Key")
-	if idempotencyKey != "" {
+	if c.GetHeader("X-Idempotency-Key") != "" {
 		existing := &repo.User{Username: username}
 		if err := db.Where("username = ?", username).First(existing).Error; err == nil && existing.Id > 0 {
 			c.JSON(http.StatusOK, gin.H{
@@ -149,10 +124,7 @@ func InternalCreateUser(c *gin.Context) {
 	}
 
 	user := &repo.User{
-		Username: username,
-		// Set on the struct as well as via the tenant-scoped context: the plugin
-		// only stamps the column when registered, and the struct must reflect the
-		// row that was written.
+		Username:    username,
 		TenantId:    defaultTenantID,
 		Email:       req.Email,
 		DisplayName: displayName,
@@ -163,13 +135,6 @@ func InternalCreateUser(c *gin.Context) {
 	}
 
 	if err := db.Create(user).Error; err != nil {
-		// The existingCount pre-check above is tenant-scoped, and users.username
-		// is unique per (tenant_id, username) since migration 025. This handler
-		// always writes into the resolved default tenant, so two requests racing
-		// to provision the same username both pass the pre-check and one loses on
-		// the composite unique here. Surface that as the same clean 409 the
-		// pre-check would have returned instead of a raw 500 with leaked DB
-		// error text.
 		if isUsernameUniqueViolation(err) {
 			c.JSON(http.StatusConflict, gin.H{
 				"success":    false,
@@ -198,11 +163,6 @@ func InternalCreateUser(c *gin.Context) {
 	})
 }
 
-// isUsernameUniqueViolation reports whether a DB create error is a UNIQUE
-// constraint violation, across both PostgreSQL (error code 23505) and SQLite
-// ("UNIQUE constraint") — mirrors repo.isUniqueViolation's string-matching
-// idiom (unexported there, so duplicated here rather than exported cross-package
-// for this single call site).
 func isUsernameUniqueViolation(err error) bool {
 	if err == nil {
 		return false
@@ -213,8 +173,7 @@ func isUsernameUniqueViolation(err error) bool {
 		strings.Contains(s, "23505")
 }
 
-// InternalDeleteUser deletes a user by ID.
-// DELETE /internal/user/:id
+// InternalDeleteUser deletes a non-root user by ID.
 func InternalDeleteUser(c *gin.Context) {
 	userId, err := strconv.Atoi(c.Param("id"))
 	if err != nil || userId <= 0 {
@@ -261,8 +220,7 @@ func InternalDeleteUser(c *gin.Context) {
 	})
 }
 
-// InternalGetUserByZitadelSub returns user by OIDC subject ID.
-// GET /internal/user/by-zitadel-sub/:sub
+// InternalGetUserByZitadelSub resolves a user and identity mapping by OIDC subject ID.
 func InternalGetUserByZitadelSub(c *gin.Context) {
 	sub := c.Param("sub")
 	if sub == "" {
@@ -297,761 +255,12 @@ func InternalGetUserByZitadelSub(c *gin.Context) {
 			"group":        user.Group,
 			"tenant_id":    user.TenantId,
 			"mapping": gin.H{
-				"id": mapping.Id,
-				// idp_subject is canonical; zitadel_user_id kept for back-compat
-				// with consumers not yet migrated. TODO(idp-migration): drop the
-				// deprecated key once all consumers read idp_subject.
+				"id":                 mapping.Id,
 				"idp_subject":        mapping.IDPSubject,
 				"zitadel_user_id":    mapping.IDPSubject,
 				"tenant_id":          mapping.TenantID,
 				"preferred_username": mapping.PreferredUsername,
 			},
 		},
-	})
-}
-
-// ===== User Provisioning =====
-
-// InternalProvisionUser atomically creates a user, identity mapping, and optional initial API token.
-// Idempotent: if the OIDC subject already maps to a user, returns the existing user.
-// POST /internal/user/provision
-func InternalProvisionUser(c *gin.Context) {
-	var req struct {
-		// IDPSubject is the canonical OIDC subject field (idp_subject). ZitadelSub
-		// (zitadel_sub) is accepted for back-compat with callers not yet migrated;
-		// see the dual-accept normalization below. Neither carries binding:required
-		// because exactly one of the two must be present (validated manually) —
-		// gui-switch already sends idp_subject, older clients still send zitadel_sub.
-		IDPSubject         string `json:"idp_subject"`
-		ZitadelSub         string `json:"zitadel_sub"`
-		Email              string `json:"email" binding:"required"`
-		DisplayName        string `json:"display_name"`
-		TenantID           string `json:"tenant_id"`
-		Group              string `json:"group"`
-		InitialQuota       int    `json:"initial_quota"`
-		CreateInitialToken bool   `json:"create_initial_token"`
-		InitialTokenName   string `json:"initial_token_name"`
-	}
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Invalid request: " + err.Error(),
-		})
-		return
-	}
-
-	// Dual-accept: prefer the canonical idp_subject; fall back to the deprecated
-	// zitadel_sub. Collapse onto req.ZitadelSub so the rest of the handler (which
-	// threads that field through) is unchanged.
-	if req.IDPSubject != "" {
-		req.ZitadelSub = req.IDPSubject
-	}
-	if req.ZitadelSub == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success":    false,
-			"message":    "Missing OIDC subject: provide idp_subject (preferred) or zitadel_sub",
-			"error_code": "VALIDATION_FAILED",
-		})
-		return
-	}
-
-	if !strings.Contains(req.Email, "@") {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success":    false,
-			"message":    "Invalid email format",
-			"error_code": "VALIDATION_FAILED",
-		})
-		return
-	}
-
-	tenantId := req.TenantID
-	if tenantId == "" {
-		tenantId = "default"
-	}
-
-	// Best-effort resolve the platform account for this OIDC subject so the
-	// provisioned user + token link to the unified wallet (the relay settlement
-	// path in quota.go engages only when token.IdentityAccountID > 0). FAIL-OPEN:
-	// a resolution miss or error must NEVER block provisioning — an identity
-	// platform outage cannot be allowed to become a login outage, mirroring every
-	// other newhub→platform caller. An unlinked user is created instead and
-	// self-heals on the next provision (below) or via the
-	// /internal/admin/backfill-token-accounts endpoint.
-	var linkedAccountID int64
-	if acct, rerr := resolveAccountByZitadelSub(c.Request.Context(), req.ZitadelSub); rerr != nil {
-		common.SysLog(fmt.Sprintf("provision: account resolve errored for zitadel_sub=%s — creating UNLINKED user (fail-open): %v", req.ZitadelSub, rerr))
-	} else if acct == nil || acct.ID <= 0 {
-		common.SysLog(fmt.Sprintf("provision: no platform account for zitadel_sub=%s yet — creating UNLINKED user (fail-open), will self-heal on re-provision", req.ZitadelSub))
-	} else {
-		linkedAccountID = acct.ID
-	}
-
-	// Idempotency: check if mapping already exists
-	existingUser, existingMapping, err := repo.GetUserByIDPSubject(req.ZitadelSub, tenantId)
-	if err == nil && existingUser != nil {
-		// Self-heal: a prior provision may have created this user before its
-		// platform account existed (unlinked). If it is now resolvable, backfill
-		// the link onto the user and its zero-account tokens so the wallet path
-		// engages on the next relay. Best-effort — a backfill hiccup must not
-		// fail the idempotent response.
-		if linkedAccountID > 0 && existingUser.LurusAccountID == nil {
-			if healErr := repo.LinkUserPlatformAccount(existingUser.Id, linkedAccountID, true); healErr != nil {
-				common.SysLog(fmt.Sprintf("provision: self-heal link failed for user %d (account=%d): %v", existingUser.Id, linkedAccountID, healErr))
-			} else {
-				common.SysLog(fmt.Sprintf("provision: self-healed link for user %d → account %d", existingUser.Id, linkedAccountID))
-			}
-		}
-		respondExistingProvisionedUser(c, existingUser, existingMapping, tenantId)
-		return
-	}
-
-	// Derive a safe username from OIDC subject
-	username := "u_" + req.ZitadelSub
-	if len(username) > 20 {
-		username = username[:20]
-	}
-	// Sanitize: only allow alphanumeric + underscore
-	sanitized := strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
-			return r
-		}
-		return '_'
-	}, username)
-	if sanitized == "" {
-		sanitized = "u_provisioned"
-	}
-
-	group := req.Group
-	if group == "" {
-		group = "default"
-	}
-
-	displayName := req.DisplayName
-	if displayName == "" {
-		displayName = strings.Split(req.Email, "@")[0]
-	}
-
-	// Begin transaction for atomicity. Scope it to the tenant so the GORM tenant
-	// plugin's create callback finds a tenant_id in Statement.Context — a bare
-	// repo.DB.Begin() carries no tenant and the three tx.Create calls below
-	// (user/mapping/token) fail with "tenant_id is required for create
-	// operations" → spurious 500. GetTenantDBWithID stamps the tenant on the
-	// DB context and .Begin() inherits Statement.Context, mirroring the verified
-	// InternalCreateUser path above.
-	tx := repo.GetTenantDBWithID(tenantId).Begin()
-	if tx.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Failed to begin transaction: " + tx.Error.Error(),
-		})
-		return
-	}
-
-	// Ensure unique username within tenant
-	finalUsername := sanitized
-	suffix := 1
-	for {
-		var count int64
-		tx.Model(&repo.User{}).Where("username = ? AND tenant_id = ?", finalUsername, tenantId).Count(&count)
-		if count == 0 {
-			break
-		}
-		suffix++
-		base := sanitized
-		candidate := fmt.Sprintf("%s_%d", base, suffix)
-		if len(candidate) > 20 {
-			base = base[:20-len(fmt.Sprintf("_%d", suffix))]
-			candidate = fmt.Sprintf("%s_%d", base, suffix)
-		}
-		finalUsername = candidate
-	}
-
-	// Step 1: Create user
-	user := &repo.User{
-		Username:    finalUsername,
-		TenantId:    tenantId,
-		Email:       req.Email,
-		DisplayName: displayName,
-		Group:       group,
-		Role:        common.RoleCommonUser,
-		Status:      common.UserStatusEnabled,
-		Quota:       req.InitialQuota,
-	}
-	if linkedAccountID > 0 {
-		user.LurusAccountID = &linkedAccountID
-	}
-
-	if err := tx.Create(user).Error; err != nil {
-		tx.Rollback()
-		// Concurrent double-provision: another in-flight request committed the
-		// same identity first — the unique index on users.lurus_account_id (when
-		// linked) or on the identity mapping fires here. Resolve the race into a
-		// clean idempotent response by returning the winner instead of a 500
-		// (mirrors zita_bootstrap.go's GetUserByLurusAccountID race probe). If no
-		// winner exists the failure was not a race and surfaces as the error.
-		if winner, winnerMapping := provisionRaceWinner(req.ZitadelSub, tenantId, linkedAccountID); winner != nil {
-			common.SysLog(fmt.Sprintf("provision: lost create race for zitadel_sub=%s, returning winner user %d", req.ZitadelSub, winner.Id))
-			respondExistingProvisionedUser(c, winner, winnerMapping, tenantId)
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Failed to create user: " + err.Error(),
-		})
-		return
-	}
-
-	// Step 2: Create identity mapping
-	now := time.Now()
-	mapping := &repo.UserIdentityMapping{
-		LurusUserID:       user.Id,
-		IDPSubject:        req.ZitadelSub,
-		TenantID:          tenantId,
-		Email:             req.Email,
-		DisplayName:       displayName,
-		PreferredUsername: finalUsername,
-		LastSyncAt:        &now,
-		IsActive:          true,
-		CreatedAt:         now,
-		UpdatedAt:         now,
-	}
-
-	if err := tx.Create(mapping).Error; err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Failed to create identity mapping: " + err.Error(),
-		})
-		return
-	}
-
-	// Step 3 (optional): Create initial API token
-	var tokenData gin.H
-	if req.CreateInitialToken {
-		tokenName := req.InitialTokenName
-		if tokenName == "" {
-			tokenName = "Default Key"
-		}
-
-		tokenKey, err := app.GenerateTokenKey()
-		if err != nil {
-			tx.Rollback()
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"success": false,
-				"message": "Failed to generate token key: " + err.Error(),
-			})
-			return
-		}
-
-		token := &repo.Token{
-			UserId:         user.Id,
-			TenantId:       tenantId,
-			Name:           tokenName,
-			Key:            tokenKey,
-			CreatedTime:    now.Unix(),
-			AccessedTime:   now.Unix(),
-			Status:         common.TokenStatusEnabled,
-			ExpiredTime:    -1,
-			RemainQuota:    req.InitialQuota,
-			UnlimitedQuota: req.InitialQuota == 0,
-			Group:          group,
-		}
-		if linkedAccountID > 0 {
-			// Linked to the unified wallet: attribute relay spend to the platform
-			// account (this is what engages quota.go's wallet settlement), and lift
-			// the TOKEN-level quota cap so the token's own RemainQuota can't bind a
-			// wallet-funded user. NOTE: this does NOT by itself make the wallet the
-			// sole gate — the user-level quota check (pre_consume_quota.go:86, on
-			// users.quota) is unchanged and still applies. Making the wallet the
-			// sole blocking gate is the separate BILLING_UNIFIED_ENABLED enablement
-			// gate, which also reconciles user-level quota → wallet balance.
-			token.IdentityAccountID = linkedAccountID
-			token.UnlimitedQuota = true
-		}
-
-		if err := tx.Create(token).Error; err != nil {
-			tx.Rollback()
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"success": false,
-				"message": "Failed to create initial token: " + err.Error(),
-			})
-			return
-		}
-
-		tokenData = gin.H{
-			"id":      token.Id,
-			"key":     tokenKey,
-			"name":    tokenName,
-			"warning": "Please save this key - it will not be shown again.",
-		}
-	}
-
-	// Commit transaction
-	if err := tx.Commit().Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Failed to commit transaction: " + err.Error(),
-		})
-		return
-	}
-
-	keyName := c.GetString("internal_api_key_name")
-	common.SysLog(fmt.Sprintf("Internal API provisioned user %d (zitadel_sub=%s) via key: %s", user.Id, req.ZitadelSub, keyName))
-
-	resp := gin.H{
-		"user_id":     user.Id,
-		"username":    finalUsername,
-		"email":       req.Email,
-		"group":       group,
-		"tenant_id":   tenantId,
-		"is_existing": false,
-		"mapping_id":  mapping.Id,
-	}
-	if tokenData != nil {
-		resp["token"] = tokenData
-	}
-
-	c.JSON(http.StatusCreated, gin.H{
-		"success": true,
-		"data":    resp,
-	})
-}
-
-// respondExistingProvisionedUser writes the idempotent "already provisioned"
-// response shared by the mapping-exists fast path and the create-race winner
-// path. mapping may be nil (the race path probes by account and may not re-read
-// the mapping) — mapping_id is then 0.
-func respondExistingProvisionedUser(c *gin.Context, user *repo.User, mapping *repo.UserIdentityMapping, tenantId string) {
-	var mappingID int
-	if mapping != nil {
-		mappingID = mapping.Id
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"data": gin.H{
-			"user_id":     user.Id,
-			"username":    user.Username,
-			"email":       user.Email,
-			"group":       user.Group,
-			"tenant_id":   tenantId,
-			"is_existing": true,
-			"mapping_id":  mappingID,
-		},
-	})
-}
-
-// provisionRaceWinner resolves a concurrent-provision race into the request that
-// committed first. Prefers the account-link probe when linked (the unique index
-// that fires on a same-account race), falling back to the zitadel-sub mapping
-// (the authoritative idempotency key). Returns (nil, nil) when no winner exists,
-// i.e. the create failure was not a race and should surface as an error.
-func provisionRaceWinner(zitadelSub, tenantID string, accountID int64) (*repo.User, *repo.UserIdentityMapping) {
-	if accountID > 0 {
-		// The unique index on users.lurus_account_id is GLOBAL (cross-tenant), so
-		// GetUserByLurusAccountID (which bypasses tenant isolation) can return a
-		// user from a DIFFERENT tenant. Only accept it as our race winner when the
-		// tenant matches — a cross-tenant account collision is NOT our race, and
-		// returning it would leak another tenant's user identity and misroute that
-		// user's LLM spend to the foreign account's wallet. On mismatch, fall
-		// through to the tenant-scoped sub probe (which finds nothing), so the
-		// create error surfaces instead of a false idempotent success.
-		if u, err := repo.GetUserByLurusAccountID(accountID); err == nil && u != nil && u.TenantId == tenantID {
-			_, m, _ := repo.GetUserByIDPSubject(zitadelSub, tenantID)
-			return u, m
-		}
-	}
-	if u, m, err := repo.GetUserByIDPSubject(zitadelSub, tenantID); err == nil && u != nil {
-		return u, m
-	}
-	return nil, nil
-}
-
-// ===== Token CRUD =====
-
-// InternalGetUserTokens returns paginated tokens for a user.
-// GET /internal/token/user/:id
-func InternalGetUserTokens(c *gin.Context) {
-	userId, err := strconv.Atoi(c.Param("id"))
-	if err != nil || userId <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Invalid user ID",
-		})
-		return
-	}
-
-	if _, err = repo.GetUserById(userId, false); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"success":    false,
-			"message":    "User not found",
-			"error_code": "USER_NOT_FOUND",
-		})
-		return
-	}
-
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 10
-	}
-
-	offset := (page - 1) * pageSize
-	tokens, err := repo.GetAllUserTokens(userId, offset, pageSize)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Failed to get tokens: " + err.Error(),
-		})
-		return
-	}
-
-	total, _ := repo.CountUserTokens(userId)
-
-	for _, t := range tokens {
-		t.Clean()
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"data": gin.H{
-			"tokens":    tokens,
-			"total":     total,
-			"page":      page,
-			"page_size": pageSize,
-		},
-	})
-}
-
-// InternalCreateToken creates a new API token for a user.
-// POST /internal/token
-func InternalCreateToken(c *gin.Context) {
-	var req struct {
-		UserId         int    `json:"user_id" binding:"required"`
-		Name           string `json:"name" binding:"required"`
-		UnlimitedQuota bool   `json:"unlimited_quota"`
-		RemainQuota    int    `json:"remain_quota"`
-	}
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Invalid request: " + err.Error(),
-		})
-		return
-	}
-
-	user, err := repo.GetUserById(req.UserId, false)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"success":    false,
-			"message":    "User not found",
-			"error_code": "USER_NOT_FOUND",
-		})
-		return
-	}
-
-	if user.Status == common.UserStatusDisabled {
-		c.JSON(http.StatusForbidden, gin.H{
-			"success":    false,
-			"message":    "User is disabled",
-			"error_code": "USER_DISABLED",
-		})
-		return
-	}
-
-	idempotencyKey := c.GetHeader("X-Idempotency-Key")
-	if idempotencyKey != "" {
-		var existing repo.Token
-		if err := repo.DB.Where("user_id = ? AND name = ?", req.UserId, req.Name).First(&existing).Error; err == nil && existing.Id > 0 {
-			c.JSON(http.StatusOK, gin.H{
-				"success": true,
-				"data": gin.H{
-					"id":           existing.Id,
-					"name":         existing.Name,
-					"is_duplicate": true,
-				},
-			})
-			return
-		}
-	}
-
-	// Generate a unique token key (BUG FIX: was missing before)
-	tokenKey, err := app.GenerateTokenKey()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Failed to generate token key: " + err.Error(),
-		})
-		return
-	}
-
-	token := &repo.Token{
-		UserId:         req.UserId,
-		TenantId:       user.TenantId,
-		Name:           req.Name,
-		Key:            tokenKey,
-		UnlimitedQuota: req.UnlimitedQuota,
-		RemainQuota:    req.RemainQuota,
-		CreatedTime:    time.Now().Unix(),
-		AccessedTime:   time.Now().Unix(),
-		Status:         common.TokenStatusEnabled,
-		ExpiredTime:    -1,
-		Group:          user.Group,
-	}
-
-	if err = token.Insert(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Failed to create token: " + err.Error(),
-		})
-		return
-	}
-
-	keyName := c.GetString("internal_api_key_name")
-	common.SysLog("Internal API created token for user " + strconv.Itoa(req.UserId) + " via key: " + keyName)
-
-	c.JSON(http.StatusCreated, gin.H{
-		"success": true,
-		"data": gin.H{
-			"id":      token.Id,
-			"key":     tokenKey,
-			"name":    token.Name,
-			"warning": "Please save this key - it will not be shown again.",
-		},
-	})
-}
-
-// InternalGetToken returns a single token by ID (key field is redacted).
-// GET /internal/token/:id
-func InternalGetToken(c *gin.Context) {
-	tokenId, err := strconv.Atoi(c.Param("id"))
-	if err != nil || tokenId <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Invalid token ID",
-		})
-		return
-	}
-
-	token, err := repo.GetTokenById(tokenId)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"success":    false,
-			"message":    "Token not found",
-			"error_code": "TOKEN_NOT_FOUND",
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"data": gin.H{
-			"id":                   token.Id,
-			"user_id":              token.UserId,
-			"tenant_id":            token.TenantId,
-			"name":                 token.Name,
-			"status":               token.Status,
-			"created_time":         token.CreatedTime,
-			"accessed_time":        token.AccessedTime,
-			"expired_time":         token.ExpiredTime,
-			"remain_quota":         token.RemainQuota,
-			"used_quota":           token.UsedQuota,
-			"unlimited_quota":      token.UnlimitedQuota,
-			"model_limits_enabled": token.ModelLimitsEnabled,
-			"model_limits":         token.GetModelLimits(),
-			"allow_ips":            token.AllowIps,
-			"group":                token.Group,
-			"cross_group_retry":    token.CrossGroupRetry,
-		},
-	})
-}
-
-// InternalGetTokenUsage returns usage statistics for a token.
-// GET /internal/token/:id/usage
-func InternalGetTokenUsage(c *gin.Context) {
-	tokenId, err := strconv.Atoi(c.Param("id"))
-	if err != nil || tokenId <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Invalid token ID",
-		})
-		return
-	}
-
-	token, err := repo.GetTokenById(tokenId)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"success":    false,
-			"message":    "Token not found",
-			"error_code": "TOKEN_NOT_FOUND",
-		})
-		return
-	}
-
-	expiredAt := token.ExpiredTime
-	if expiredAt == -1 {
-		expiredAt = 0
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"data": gin.H{
-			"token_id":        token.Id,
-			"name":            token.Name,
-			"status":          token.Status,
-			"total_granted":   token.RemainQuota + token.UsedQuota,
-			"total_used":      token.UsedQuota,
-			"total_available": token.RemainQuota,
-			"unlimited_quota": token.UnlimitedQuota,
-			"expires_at":      expiredAt,
-			"last_accessed":   token.AccessedTime,
-		},
-	})
-}
-
-// InternalUpdateToken updates a token's properties.
-// PUT /internal/token/:id
-func InternalUpdateToken(c *gin.Context) {
-	tokenId, err := strconv.Atoi(c.Param("id"))
-	if err != nil || tokenId <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Invalid token ID",
-		})
-		return
-	}
-
-	token, err := repo.GetTokenById(tokenId)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"success":    false,
-			"message":    "Token not found",
-			"error_code": "TOKEN_NOT_FOUND",
-		})
-		return
-	}
-
-	var req struct {
-		Name               *string `json:"name"`
-		Status             *int    `json:"status"`
-		ExpiredTime        *int64  `json:"expired_time"`
-		RemainQuota        *int    `json:"remain_quota"`
-		UnlimitedQuota     *bool   `json:"unlimited_quota"`
-		ModelLimitsEnabled *bool   `json:"model_limits_enabled"`
-		ModelLimits        *string `json:"model_limits"`
-		AllowIps           *string `json:"allow_ips"`
-		Group              *string `json:"group"`
-		CrossGroupRetry    *bool   `json:"cross_group_retry"`
-	}
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Invalid request: " + err.Error(),
-		})
-		return
-	}
-
-	if req.Name != nil {
-		if err := app.ValidateTokenName(*req.Name); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"success":    false,
-				"message":    err.Error(),
-				"error_code": "VALIDATION_FAILED",
-			})
-			return
-		}
-		token.Name = *req.Name
-	}
-	if req.Status != nil {
-		token.Status = *req.Status
-	}
-	if req.ExpiredTime != nil {
-		token.ExpiredTime = *req.ExpiredTime
-	}
-	if req.RemainQuota != nil {
-		token.RemainQuota = *req.RemainQuota
-	}
-	if req.UnlimitedQuota != nil {
-		token.UnlimitedQuota = *req.UnlimitedQuota
-	}
-	if req.ModelLimitsEnabled != nil {
-		token.ModelLimitsEnabled = *req.ModelLimitsEnabled
-	}
-	if req.ModelLimits != nil {
-		token.ModelLimits = *req.ModelLimits
-	}
-	if req.AllowIps != nil {
-		token.AllowIps = req.AllowIps
-	}
-	if req.Group != nil {
-		token.Group = *req.Group
-	}
-	if req.CrossGroupRetry != nil {
-		token.CrossGroupRetry = *req.CrossGroupRetry
-	}
-
-	if err := token.Update(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Failed to update token: " + err.Error(),
-		})
-		return
-	}
-
-	keyName := c.GetString("internal_api_key_name")
-	common.SysLog(fmt.Sprintf("Internal API updated token %d via key: %s", tokenId, keyName))
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "Token updated successfully",
-		"data": gin.H{
-			"id":     token.Id,
-			"name":   token.Name,
-			"status": token.Status,
-		},
-	})
-}
-
-// InternalDeleteToken deletes (revokes) a token by ID.
-// DELETE /internal/token/:id
-func InternalDeleteToken(c *gin.Context) {
-	tokenId, err := strconv.Atoi(c.Param("id"))
-	if err != nil || tokenId <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Invalid token ID",
-		})
-		return
-	}
-
-	token, err := repo.GetTokenById(tokenId)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"success":    false,
-			"message":    "Token not found",
-			"error_code": "TOKEN_NOT_FOUND",
-		})
-		return
-	}
-
-	if err := token.Delete(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Failed to delete token: " + err.Error(),
-		})
-		return
-	}
-
-	keyName := c.GetString("internal_api_key_name")
-	common.SysLog(fmt.Sprintf("Internal API deleted token %d (user=%d) via key: %s", tokenId, token.UserId, keyName))
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "Token deleted successfully",
 	})
 }

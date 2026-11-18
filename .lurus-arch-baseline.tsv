@@ -45,9 +45,6 @@ internal/adapter/handler/health.go	ARCH-CMT-002	51	legacy-hits
 internal/adapter/handler/internal_api.go	ARCH-CMT-002	66	legacy-hits
 internal/adapter/handler/internal_api.go	ARCH-LEN-001	752	legacy-lines
 internal/adapter/handler/internal_api_audit_test.go	ARCH-LEN-001	555	legacy-lines
-internal/adapter/handler/internal_api_ext.go	ARCH-CMT-001	1	legacy-hits
-internal/adapter/handler/internal_api_ext.go	ARCH-CMT-002	78	legacy-hits
-internal/adapter/handler/internal_api_ext.go	ARCH-LEN-001	1057	legacy-lines
 internal/adapter/handler/internal_api_integration_test.go	ARCH-LEN-001	1771	legacy-lines
 internal/adapter/handler/internal_api_test.go	ARCH-LEN-001	601	legacy-lines
 internal/adapter/handler/internal_backfill.go	ARCH-CMT-002	8	legacy-hits
@@ -79,8 +76,6 @@ internal/adapter/handler/model_sync.go	ARCH-LEN-001	620	legacy-lines
 internal/adapter/handler/model_sync.go	ARCH-PRI-001	4	legacy-hits
 internal/adapter/handler/model_sync.go	ARCH-PRI-002	1	legacy-hits
 internal/adapter/handler/model_sync_worker.go	ARCH-CMT-002	9	legacy-hits
-internal/adapter/handler/oauth.go	ARCH-CMT-002	112	legacy-hits
-internal/adapter/handler/oauth.go	ARCH-LEN-001	979	legacy-lines
 internal/adapter/handler/oauth_state.go	ARCH-CMT-002	15	legacy-hits
 internal/adapter/handler/oidc_login_e2e_test.go	ARCH-LEN-001	550	legacy-lines
 internal/adapter/handler/openrouter_pool.go	ARCH-CMT-002	9	legacy-hits
@@ -107,10 +102,6 @@ internal/adapter/handler/ratio_sync.go	ARCH-CMT-002	39	legacy-hits
 internal/adapter/handler/ratio_sync.go	ARCH-LEN-001	609	legacy-lines
 internal/adapter/handler/ratio_sync.go	ARCH-PRI-001	1	legacy-hits
 internal/adapter/handler/redemption.go	ARCH-CMT-002	13	legacy-hits
-internal/adapter/handler/relay.go	ARCH-CMT-001	1	legacy-hits
-internal/adapter/handler/relay.go	ARCH-CMT-002	189	legacy-hits
-internal/adapter/handler/relay.go	ARCH-CMT-004	2	legacy-hits
-internal/adapter/handler/relay.go	ARCH-LEN-001	958	legacy-lines
 internal/adapter/handler/relay_breaker_outcome.go	ARCH-CMT-002	3	legacy-hits
 internal/adapter/handler/relay_channel_metrics.go	ARCH-CMT-002	1	legacy-hits
 internal/adapter/handler/relay_content_rules.go	ARCH-CMT-002	2	legacy-hits
