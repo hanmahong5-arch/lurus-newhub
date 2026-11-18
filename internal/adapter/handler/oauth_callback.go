@@ -106,12 +106,7 @@ func OIDCCallback(c *gin.Context) {
 		return
 	}
 
-	if err := middleware.RotateSessionID(c); err != nil {
-		common.SysError(fmt.Sprintf("oidc callback: session rotation failed for user %d: %v", user.Id, err))
-	}
-
-	linkCallbackPlatformAndDefaultToken(c, session, user, claims.Subject)
-	persistAuthenticatedSession(session, user, tokenResp, stateData.TenantSlug)
+	persistAuthenticatedSession(c, session, user, claims.Subject, tokenResp, stateData.TenantSlug)
 	if err := session.Save(); err != nil {
 		common.SysError(fmt.Sprintf("Failed to save session: %v", err))
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -238,7 +233,11 @@ func linkCallbackPlatformAndDefaultToken(c *gin.Context, session sessions.Sessio
 	}
 }
 
-func persistAuthenticatedSession(session sessions.Session, user *repo.User, tokenResp *OAuthTokenResponse, tenantSlug string) {
+func persistAuthenticatedSession(c *gin.Context, session sessions.Session, user *repo.User, subject string, tokenResp *OAuthTokenResponse, tenantSlug string) {
+	if err := middleware.RotateSessionID(c); err != nil {
+		common.SysError(fmt.Sprintf("oidc callback: session rotation failed for user %d: %v", user.Id, err))
+	}
+	linkCallbackPlatformAndDefaultToken(c, session, user, subject)
 	session.Delete("pkce_code_verifier")
 	session.Delete("oauth_nonce")
 	session.Set("id", user.Id)

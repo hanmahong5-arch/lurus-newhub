@@ -319,8 +319,6 @@ internal/adapter/middleware/middleware_cover_test.go	ARCH-LEN-001	801	legacy-lin
 internal/adapter/middleware/model-rate-limit.go	ARCH-CMT-002	79	legacy-hits
 internal/adapter/middleware/model-rate-limit.go	ARCH-LEN-001	348	legacy-lines
 internal/adapter/middleware/model-rate-limit.go	ARCH-PRI-002	1	legacy-hits
-internal/adapter/middleware/oidc_auth.go	ARCH-CMT-002	131	legacy-hits
-internal/adapter/middleware/oidc_auth.go	ARCH-LEN-001	1214	legacy-lines
 internal/adapter/middleware/oidc_auth_integration_test.go	ARCH-LEN-001	679	legacy-lines
 internal/adapter/middleware/oidc_auth_test.go	ARCH-LEN-001	727	legacy-lines
 internal/adapter/middleware/oidc_session_fallback.go	ARCH-CMT-002	37	legacy-hits
@@ -344,7 +342,7 @@ internal/adapter/middleware/tenant_scope.go	ARCH-CMT-002	2	legacy-hits
 internal/adapter/middleware/utils.go	ARCH-CMT-002	12	legacy-hits
 internal/adapter/middleware/utils.go	ARCH-DIR-003	1	legacy-hits
 internal/adapter/middleware/wire_format.go	ARCH-CMT-002	10	legacy-hits
-internal/adapter/middleware/wire_message_language_gate_test.go	ARCH-LEN-001	666	legacy-lines
+internal/adapter/middleware/wire_message_language_gate_test.go	ARCH-LEN-001	659	legacy-lines
 internal/adapter/provider/ali/adaptor.go	ARCH-CMT-001	3	legacy-hits
 internal/adapter/provider/ali/adaptor.go	ARCH-CMT-002	13	legacy-hits
 internal/adapter/provider/ali/adaptor.go	ARCH-CMT-004	1	legacy-hits
@@ -413,9 +411,6 @@ internal/adapter/provider/gemini/cov_convert_openai_test.go	ARCH-LEN-001	1142	le
 internal/adapter/provider/gemini/cov_handlers_test.go	ARCH-LEN-001	630	legacy-lines
 internal/adapter/provider/gemini/cov_schema_helpers_test.go	ARCH-LEN-001	574	legacy-lines
 internal/adapter/provider/gemini/relay-gemini-native.go	ARCH-CMT-002	8	legacy-hits
-internal/adapter/provider/gemini/relay-gemini.go	ARCH-CMT-002	102	legacy-hits
-internal/adapter/provider/gemini/relay-gemini.go	ARCH-CMT-004	4	legacy-hits
-internal/adapter/provider/gemini/relay-gemini.go	ARCH-LEN-001	1438	legacy-lines
 internal/adapter/provider/gemini/relay_gemini_test.go	ARCH-LEN-001	634	legacy-lines
 internal/adapter/provider/jimeng/adaptor.go	ARCH-CMT-001	1	legacy-hits
 internal/adapter/provider/jimeng/adaptor.go	ARCH-CMT-002	1	legacy-hits
@@ -520,9 +515,6 @@ internal/adapter/repo/admin_permission_grant.go	ARCH-CMT-002	4	legacy-hits
 internal/adapter/repo/analytics.go	ARCH-CMT-002	5	legacy-hits
 internal/adapter/repo/analytics.go	ARCH-LEN-001	609	legacy-lines
 internal/adapter/repo/audit.go	ARCH-CMT-002	1	legacy-hits
-internal/adapter/repo/channel.go	ARCH-CMT-002	56	legacy-hits
-internal/adapter/repo/channel.go	ARCH-CMT-004	1	legacy-hits
-internal/adapter/repo/channel.go	ARCH-LEN-001	1225	legacy-lines
 internal/adapter/repo/channel_affinity.go	ARCH-CMT-002	6	legacy-hits
 internal/adapter/repo/channel_cache.go	ARCH-CMT-002	51	legacy-hits
 internal/adapter/repo/channel_cache.go	ARCH-CMT-004	1	legacy-hits
@@ -603,8 +595,6 @@ internal/adapter/repo/tenant_plugin.go	ARCH-CMT-002	27	legacy-hits
 internal/adapter/repo/token.go	ARCH-CMT-002	37	legacy-hits
 internal/adapter/repo/token.go	ARCH-LEN-001	788	legacy-lines
 internal/adapter/repo/usedata.go	ARCH-CMT-002	24	legacy-hits
-internal/adapter/repo/user.go	ARCH-CMT-002	30	legacy-hits
-internal/adapter/repo/user.go	ARCH-LEN-001	1206	legacy-lines
 internal/adapter/repo/user_cache.go	ARCH-CMT-002	6	legacy-hits
 internal/adapter/repo/user_edit.go	ARCH-CMT-002	22	legacy-hits
 internal/adapter/repo/user_mapping.go	ARCH-CMT-002	24	legacy-hits
@@ -641,8 +631,6 @@ internal/app/channel_select.go	ARCH-LEN-001	319	legacy-lines
 internal/app/contentpolicy/guard.go	ARCH-CMT-002	2	legacy-hits
 internal/app/contentpolicy/hooks.go	ARCH-PRI-001	1	legacy-hits
 internal/app/contentpolicy/retention.go	ARCH-PRI-001	1	legacy-hits
-internal/app/convert.go	ARCH-CMT-002	75	legacy-hits
-internal/app/convert.go	ARCH-LEN-001	1304	legacy-lines
 internal/app/convert_test.go	ARCH-LEN-001	742	legacy-lines
 internal/app/cost_spike.go	ARCH-CMT-002	9	legacy-hits
 internal/app/cost_spike.go	ARCH-PRI-002	1	legacy-hits
@@ -709,10 +697,6 @@ internal/app/planquota/wiring.go	ARCH-PRI-002	1	legacy-hits
 internal/app/pre_consume_quota.go	ARCH-CMT-002	98	legacy-hits
 internal/app/pre_consume_quota.go	ARCH-LEN-001	418	legacy-lines
 internal/app/project_budget.go	ARCH-CMT-002	2	legacy-hits
-internal/app/quota.go	ARCH-CMT-001	1	legacy-hits
-internal/app/quota.go	ARCH-CMT-002	308	legacy-hits
-internal/app/quota.go	ARCH-CMT-004	1	legacy-hits
-internal/app/quota.go	ARCH-LEN-001	1270	legacy-lines
 internal/app/quota_consume_test.go	ARCH-LEN-001	867	legacy-lines
 internal/app/quota_pool.go	ARCH-CMT-002	15	legacy-hits
 internal/app/quota_settle.go	ARCH-CMT-002	60	legacy-hits
