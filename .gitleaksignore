@@ -36,3 +36,8 @@ ed0b260cd7604fe746f36cb2bd6bd37973dad47e:internal/app/relay/relay_coverage_gap_t
 fceace79294c12d2326e84ead6e9933c68bed5e8:web/next/src/features/admin-model-performance/index.tsx:generic-api-key:231
 fceace79294c12d2326e84ead6e9933c68bed5e8:web/next/src/features/admin-model-performance/index.tsx:generic-api-key:232
 7ccce3acb767caaa6857058e1a30140852d65797:.gitleaksignore:generic-api-key:32
+
+# Not a secret: the provision error map in internal_api_provision.go keys its
+# message prefixes by stage name, so the "token" stage reads to k8s-literal-password
+# like a literal credential. The value is the text "Failed to create initial token: ".
+internal/adapter/handler/internal_api_provision.go:k8s-literal-password:150
